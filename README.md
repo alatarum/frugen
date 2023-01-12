@@ -77,7 +77,7 @@ For the most up-to-date information on the frugen tool invocation and options, p
 use `frugen -h`, below is an example of the output of that command:
 
 ```
-FRU Generator v1.3.2.g1429f89 (c) 2016-2021, Alexander Amelkin <alexander@amelkin.msk.ru>
+FRU Generator v1.3.20.g90294f7 (c) 2016-2023, Alexander Amelkin <alexander@amelkin.msk.ru>
 
 Usage: frugen [options] <filename>
 
@@ -102,10 +102,13 @@ Options:
 		Out of ASCII range data will still result in binary encoding.
 
 	-j, --json
-		Set input text file format to JSON (default). Specify before '--from'.
+		Set input file format to JSON. Specify before '--from'.
+
+	-r, --raw
+		Set input file format to raw binary. Specify before '--from'.
 
 	-z, --from <argument>
-		Load FRU information from a text file.
+		Load FRU information from a file.
 
 	-t, --chassis-type <argument>
 		Set chassis type (hex). Defaults to 0x02 ('Unknown').
@@ -171,7 +174,7 @@ Options:
 	-U, --mr-uuid <argument>
 		Set System Unique ID (UUID/GUID).
 
-Example:
+Example (encode):
 	frugen --board-mfg "Biggest International Corp." \
 	       --board-pname "Some Cool Product" \
 	       --board-pn "BRD-PN-123" \
@@ -180,6 +183,9 @@ Example:
 	       --board-file "Command Line" \
 	       --binary --board-custom "01020304FEAD1E" \
 	       fru.bin
+
+Example (decode):
+	frugen --raw --from fru.bin -
 ```
 
 ### JSON
