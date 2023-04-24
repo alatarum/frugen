@@ -120,16 +120,17 @@ uint8_t fru_get_typelen(int len, /**< [in] Length of the data, LEN_AUTO for pure
 	if (len < 0) {
 		DEBUG("Forcing string '%s' to ...\n", (char *)data);
 		// Explicit text type
-		if (len == LEN_BCDPLUS) {
+		switch (len) {
+		case LEN_BCDPLUS:
 			DEBUG("BCDPLUS type\n");
 			return FRU_TYPELEN(BCDPLUS, (strlen(data) + 1) / 2);
-		} else if (len == LEN_6BITASCII) {
+		case LEN_6BITASCII:
 			DEBUG("6BIT ASCII type\n");
 			return FRU_TYPELEN(ASCII_6BIT, FRU_6BIT_LENGTH(strlen(data)));
-		} else if (len == LEN_TEXT) {
+		case LEN_TEXT:
 			DEBUG("ASCII type\n");
 			return FRU_TYPELEN(TEXT, strlen(data));
-		} else {
+		default:
 			DEBUG("Nothing... Unknown text type\n");
 			return FRU_FIELD_TERMINATOR;
 		}
