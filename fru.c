@@ -699,11 +699,13 @@ err:
 }
 
 static
-bool fru_decode_custom_fields(const uint8_t *data, fru_reclist_t **reclist)
+bool fru_decode_custom_fields(const uint8_t *data,
+                              int bytes,
+                              fru_reclist_t **reclist)
 {
 	fru_field_t *field = NULL;
 
-	while (true) {
+	while (bytes > 0) {
 		field = (fru_field_t*)data;
 
 		// end of fields
@@ -733,6 +735,12 @@ bool fru_decode_custom_fields(const uint8_t *data, fru_reclist_t **reclist)
 				break;
 		}
 		data += length + 1;
+		bytes -= length + 1;
+	}
+
+	if (bytes <= 0) {
+		DEBUG("area doesn't contain an end-of-fields byte\n");
+		return false;
 	}
 
 	return true;
@@ -793,6 +801,7 @@ bool fru_decode_chassis_info(const fru_chassis_area_t *area,
 {
 	chassis_out->type = area->langtype;
 	const uint8_t *data = area->data;
+	int bytes_left = area->blocks * FRU_BLOCK_SZ;
 	fru_field_t *field = (fru_field_t*)data;
 
 	if(!fru_decode_data(field, &chassis_out->pn,
@@ -802,6 +811,7 @@ bool fru_decode_chassis_info(const fru_chassis_area_t *area,
 	}
 
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &chassis_out->serial,
 	                     sizeof(chassis_out->serial.val)))
@@ -809,8 +819,9 @@ bool fru_decode_chassis_info(const fru_chassis_area_t *area,
 		return false;
 	}
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
-	fru_decode_custom_fields(data, &chassis_out->cust);
+	fru_decode_custom_fields(data, bytes_left, &chassis_out->cust);
 
 	return true;
 }
@@ -877,6 +888,7 @@ bool fru_decode_board_info(const fru_board_area_t *area,
 {
 	fru_field_t *field;
 	const uint8_t *data = area->data;
+	int bytes_left = area->blocks * FRU_BLOCK_SZ;
 
 	board_out->lang = area->langtype;
 
@@ -897,32 +909,37 @@ bool fru_decode_board_info(const fru_board_area_t *area,
 	                     sizeof(board_out->mfg.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &board_out->pname,
 	                     sizeof(board_out->pname.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &board_out->serial,
 	                     sizeof(board_out->serial.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &board_out->pn,
 	                     sizeof(board_out->pn.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &board_out->file,
 	                     sizeof(board_out->file.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
-	fru_decode_custom_fields(data, &board_out->cust);
+	fru_decode_custom_fields(data, bytes_left, &board_out->cust);
 
 	return true;
 }
@@ -1168,6 +1185,7 @@ bool fru_decode_product_info(const fru_product_area_t *area,
 {
 	fru_field_t *field;
 	const uint8_t *data = area->data;
+	int bytes_left = area->blocks * FRU_BLOCK_SZ;
 
 	product_out->lang = area->langtype;
 
@@ -1176,44 +1194,51 @@ bool fru_decode_product_info(const fru_product_area_t *area,
 	                     sizeof(product_out->mfg.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &product_out->pname,
 	                     sizeof(product_out->pname.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &product_out->pn,
 	                     sizeof(product_out->pn.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &product_out->ver,
 	                     sizeof(product_out->ver.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &product_out->serial,
 	                     sizeof(product_out->serial.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &product_out->atag,
 	                     sizeof(product_out->atag.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
 	field = (fru_field_t*)data;
 	if (!fru_decode_data(field, &product_out->file,
 	                     sizeof(product_out->file.val)))
 		return false;
 	data += FRU_FIELDSIZE(field->typelen);
+	bytes_left -= FRU_FIELDSIZE(field->typelen);
 
-	fru_decode_custom_fields(data, &product_out->cust);
+	fru_decode_custom_fields(data, bytes_left, &product_out->cust);
 
 	return true;
 }
