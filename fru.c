@@ -1279,10 +1279,7 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 		fru_info_area_t *data = area[i].data;
 
 		// Area type must be valid and match the index
-		if (!FRU_IS_ATYPE_VALID(atype)
-		    || atype != (uint8_t)FRU_AREA_NOT_PRESENT
-		    && atype != i)
-		{
+		if (!FRU_IS_ATYPE_VALID(atype) || atype != i) {
 			errno = EINVAL;
 			return NULL;
 		}
