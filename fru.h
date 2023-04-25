@@ -252,7 +252,7 @@ typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
 
 /** FRU field type. Any of BINARY, BCDPLUS, ASCII_6BIT or TEXT. */
 #define FRU_MAKETYPE(x)        (__TYPE_##x << __TYPE_BITS_SHIFT)
-#define FRU_FIELDDATALEN(x)   ((x) & ~__TYPE_BITS_MASK)
+#define FRU_FIELDDATALEN(x)   (size_t)(((x) & ~__TYPE_BITS_MASK))
 #define FRU_FIELDMAXLEN       FRU_FIELDDATALEN(UINT8_MAX) // For FRU fields
 #define FRU_FIELDMAXARRAY     (FRU_FIELDMAXLEN + 1) // For C array allocation
 #define FRU_FIELDSIZE(typelen) (FRU_FIELDDATALEN(typelen) + sizeof(fru_field_t))
@@ -265,8 +265,8 @@ typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
 #define LEN_6BITASCII         -2
 #define LEN_TEXT              -3
 
-#define FRU_6BIT_LENGTH(len)    (((len) * 3 + 3) / 4)
-#define FRU_6BIT_FULLLENGTH(l6) (((l6) * 4) / 3)
+#define FRU_6BIT_LENGTH(len)    (((size_t)(len) * 3 + 3) / 4)
+#define FRU_6BIT_FULLLENGTH(l6) (((size_t)(l6) * 4) / 3)
 #define FRU_FIELD_EMPTY       FRU_TYPELEN(TEXT, 0)
 #define FRU_FIELD_TERMINATOR  FRU_TYPELEN(TEXT, 1)
 
@@ -324,7 +324,7 @@ typedef struct {
 	fru_reclist_t *cust;
 } fru_exploded_product_t;
 
-#define fru_loadfield(eafield, value) strncpy(eafield, value, FRU_FIELDMAXLEN)
+#define fru_loadfield(eafield, value) strncpy((char *)eafield, value, FRU_FIELDMAXLEN)
 
 void fru_set_autodetect(bool enable);
 

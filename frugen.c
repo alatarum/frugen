@@ -14,6 +14,7 @@
 #define _GNU_SOURCE
 #include <getopt.h>
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,20 +88,26 @@ void hexdump(const void *data, size_t len)
  * Convert 2 bytes of hex string into a binary byte
  */
 static
-long hex2byte(const char *hex) {
-	static const long hextable[256] = {
+int16_t hex2byte(const char *hex) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverride-init"
+	// First initialize the array with all FFs,
+	// then override the values for the bytes that
+	// are valid hexadecimal digits
+	static const int8_t hextable[256] = {
 		[0 ... 255] = -1,
 		['0'] = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
 		['A'] = 10, 11, 12, 13, 14, 15,
 		['a'] = 10, 11, 12, 13, 14, 15
 	};
+#pragma GCC diagnostic pop
 
 	if (!hex) return -1;
 
-	long hi = hextable[hex[0]];
-	long lo = hextable[hex[1]];
+	int16_t hi = hextable[(off_t)hex[0]];
+	int16_t lo = hextable[(off_t)hex[1]];
 
-	debug(9, "hi = %02lX, lo = %02lX", hi, lo);
+	debug(9, "hi = %02" PRIX16 ", lo = %02" PRIX16, hi, lo);
 
 	if (hi < 0 || lo < 0)
 		return -1;
@@ -145,7 +152,7 @@ bool datestr_to_tv(const char *datestr, struct timeval *tv)
 static
 uint8_t * fru_encode_binary_string(size_t *len, const char *hexstr)
 {
-	int i;
+	size_t i;
 	uint8_t *buf;
 
 	if (!len) {
@@ -161,8 +168,8 @@ uint8_t * fru_encode_binary_string(size_t *len, const char *hexstr)
 	if (!buf)
 		fatal("Failed to allocate a buffer for binary data");
 	for (i = 0; i < *len; i++) {
-		long byte = hex2byte(hexstr + 2 * i);
-		debug(4, "[%d] %c %c => 0x%02lX",
+		int16_t byte = hex2byte(hexstr + 2 * i);
+		debug(4, "[%zd] %c %c => 0x%02" PRIX16,
 		      i, hexstr[2 * i], hexstr[2 * i + 1], byte);
 		if (byte < 0)
 			fatal("Invalid hex data provided for binary attribute");
@@ -243,7 +250,7 @@ bool json_fill_fru_area_fields(json_object *jso, int count,
 					      type, fieldnames[i]);
 					continue;
 				}
-				fru_loadfield(fields[i]->val, val);
+				fru_loadfield((char *)fields[i]->val, val);
 				debug(2, "Field %s '%s' (%s) loaded from JSON",
 				      fieldnames[i], val, type);
 				data_in_this_area = true;
@@ -285,7 +292,7 @@ bool json_fill_fru_area_custom(json_object *jso, fru_reclist_t **custom)
 
 	for (i = 0; i < alen; i++) {
 		const char *type = NULL;
-		const char *data = NULL;
+		const void *data = NULL;
 		json_object *item, *ifield;
 
 		item = json_object_array_get_idx(jsfield, i);
@@ -392,7 +399,11 @@ bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
 			if (!strcmp(subtype, "uuid")) {
 				const unsigned char *uuid = NULL;
 				json_object_object_get_ex(item, "uuid", &ifield);
-				if (!ifield || !(uuid = json_object_get_string(ifield))) {
+				if (ifield) {
+					uuid = (const unsigned char *)json_object_get_string(ifield);
+				}
+
+				if (!ifield || !uuid) {
 					fatal("A uuid management record must have a uuid field");
 				}
 
@@ -424,7 +435,7 @@ int json_object_add_with_type(struct json_object* obj,
                               const unsigned char* val,
                               int type) {
 	struct json_object *string, *type_string, *entry;
-	if ((string = json_object_new_string(val)) == NULL)
+	if ((string = json_object_new_string((const char *)val)) == NULL)
 		goto STRING_ERR;
 
 	if (type == FIELD_TYPE_AUTO) {
@@ -456,7 +467,7 @@ STRING_ERR:
 
 int main(int argc, char *argv[])
 {
-	int i;
+	size_t i;
 	int fd;
 	int opt;
 	int lindex;
@@ -477,9 +488,9 @@ int main(int argc, char *argv[])
 		{ .atype = FRU_MULTIRECORD }
 	};
 
-	fru_exploded_chassis_t chassis = { 0, .type = SMBIOS_CHASSIS_UNKNOWN };
-	fru_exploded_board_t board = { 0, .lang = LANG_ENGLISH };
-	fru_exploded_product_t product = { 0, .lang = LANG_ENGLISH };
+	fru_exploded_chassis_t chassis = { .type = SMBIOS_CHASSIS_UNKNOWN };
+	fru_exploded_board_t board = { .lang = LANG_ENGLISH };
+	fru_exploded_product_t product = { .lang = LANG_ENGLISH };
 
 	tzset();
 	gettimeofday(&board.tv, NULL);
@@ -589,7 +600,7 @@ int main(int argc, char *argv[])
 	bool use_json = false; /* TODO: Add more input formats, consider libconfig */
 	bool use_binary = false;
 
-	unsigned char optstring[ARRAY_SZ(options) * 2 + 1] = {0};
+	char optstring[ARRAY_SZ(options) * 2 + 1] = {0};
 
 	for (i = 0; i < ARRAY_SZ(options); ++i) {
 		static int k = 0;
@@ -682,9 +693,8 @@ int main(int argc, char *argv[])
 								debug(2, "Internal use are w/o data, skipping");
 								continue;
 							}
-							fru_field_t *field;
 							size_t datalen;
-							char *encoded_data =
+							uint8_t *encoded_data =
 								fru_encode_binary_string(&datalen, data);
 							size_t blocklen = FRU_BLOCKS(datalen + sizeof(*internal));
 							internal = calloc(1, FRU_BYTES(blocklen));
@@ -929,7 +939,8 @@ int main(int argc, char *argv[])
 
 			switch(opt) {
 				case 'U': // UUID
-					errno = fru_mr_uuid2rec(&mr_reclist_tail->rec, optarg);
+					errno = fru_mr_uuid2rec(&mr_reclist_tail->rec,
+					                        (uint8_t *)optarg);
 					if (errno) {
 						fatal("Failed to convert UUID: %m");
 					}
@@ -952,7 +963,8 @@ int main(int argc, char *argv[])
 			}
 			else {
 				debug(3, "The custom field will be auto-typed");
-				custptr->rec = fru_encode_data(LEN_AUTO, optarg);
+				custptr->rec = fru_encode_data(LEN_AUTO,
+				                               (uint8_t *)optarg);
 			}
 			if (!custptr->rec) {
 				fatal("Failed to encode custom field. Memory allocation or field length problem.");
