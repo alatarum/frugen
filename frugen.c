@@ -1,14 +1,14 @@
 /** @file
  *  @brief FRU generator utility
  *
- *  Copyright (C) 2016-2021 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *  Copyright (C) 2016-2023 Alexander Amelkin <alexander@amelkin.msk.ru>
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 #ifndef VERSION
-#define VERSION "v1.2-dirty-orphan"
+#define VERSION "v1.4-dirty-orphan"
 #endif
 
-#define COPYRIGHT_YEARS "2016-2021"
+#define COPYRIGHT_YEARS "2016-2023"
 #define MAX_FILE_SIZE 1L * 1024L * 1024L
 
 #define _GNU_SOURCE
@@ -694,7 +694,8 @@ int main(int argc, char *argv[])
 		['t'] = "Set chassis type (hex). Defaults to 0x02 ('Unknown')",
 		['a'] = "Set chassis part number",
 		['c'] = "Set chassis serial number",
-		['C'] = "Add a custom chassis information field, may be used multiple times",
+		['C'] = "Add a custom chassis information field, may be used multiple times.\n\t\t"
+		        "NOTE: This does NOT replace the data specified in the template",
 		/* Board info area related options */
 		['n'] = "Set board product name",
 		['m'] = "Set board manufacturer name",
@@ -704,7 +705,8 @@ int main(int argc, char *argv[])
 		['p'] = "Set board part number",
 		['s'] = "Set board serial number",
 		['f'] = "Set board FRU file ID",
-		['B'] = "Add a custom board information field, may be used multiple times",
+		['B'] = "Add a custom board information field, may be used multiple times.\n\t\t"
+		        "NOTE: This does NOT replace the data specified in the template",
 		/* Product info area related options */
 		['N'] = "Set product name",
 		['G'] = "Set product manufacturer name",
@@ -713,9 +715,11 @@ int main(int argc, char *argv[])
 		['S'] = "Set product serial number",
 		['F'] = "Set product FRU file ID",
 		['A'] = "Set product Asset Tag",
-		['P'] = "Add a custom product information field, may be used multiple times",
+		['P'] = "Add a custom product information field, may be used multiple times\n\t\t"
+		        "NOTE: This does NOT replace the data specified in the template",
 		/* MultiRecord area related options */
-		['U'] = "Set System Unique ID (UUID/GUID)",
+		['U'] = "Set System Unique ID (UUID/GUID)\n\t\t"
+		        "NOTE: This does NOT replace the data specified in the template",
 	};
 
 	fru_flags_t flags = FRU_NOFLAGS;
@@ -782,7 +786,7 @@ int main(int argc, char *argv[])
 				break;
 			}
 			case 'h': // help
-				printf("FRU Generator %s (c) %s, "
+				printf("FRU Generator %s (C) %s, "
 					   "Alexander Amelkin <alexander@amelkin.msk.ru>\n",
 					   VERSION, COPYRIGHT_YEARS);
 				printf("\n"

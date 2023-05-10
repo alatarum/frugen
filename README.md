@@ -25,18 +25,13 @@ So far supported in libfru:
     The exceptions are:
 
     * all text is always encoded as if the language code was English (ASCII, 1 byte per character)
-    * encoding is selected automatically based on value range of the supplied data, only binary format
-      can be enforced by specifying the length other than LEN_AUTO.
+    * encoding is selected either automatically based on value range of the supplied data, or by
+      specifying it explicitly
 
-  * Data decoding from all the declared formats.
+  * Data decoding from all the formats defined by the specification.
     Exception: Unicode is not supported
 
-  * Internal use area creation, with the following limitations:
-
-    * Only from file
-    * Only automatic sizing, all data must be specified in
-      the input template file
-
+  * Internal use area creation, only with automatic sizing
   * Chassis information area creation
   * Board information area creation
   * Product information area creation
@@ -48,15 +43,16 @@ So far supported in libfru:
 
   * FRU file creation (in a memory buffer)
 
-NOT supported:
+_NOT supported:_
 
-  * Internal use area creation/modification from the command line
   * Miltirecord area record types other than listed above
+  * Internal use area decoding
 
 ## frugen
 
 The frugen tool supports the following (limitations imposed by the libfru library):
 
+  * Internal use area (encoding only, from raw hex string)
   * Board area creation (including custom fields)
   * Product area creation (including custom fields)
   * Chassis area creation (including custom fields)
@@ -67,7 +63,8 @@ The limitations:
   * All data fields (except custom) are always treated as ASCII text, and the encoding
     is automatically selected based on the byte range of the provided data. Custom fields
     may be forced to be binary using --binary option.
-  * Internal use area is not supported
+  * Internal use area creation/modification is available only from template file,
+    not available from the command line arguments.
   * You should specify the UUID and the custom fields in either
     the template file OR in the command line. The command line does
     NOT override the template file in that regard, but creates an additional
@@ -77,7 +74,7 @@ For the most up-to-date information on the frugen tool invocation and options, p
 use `frugen -h`, below is an example of the output of that command:
 
 ```
-FRU Generator v1.3.20.g90294f7 (c) 2016-2023, Alexander Amelkin <alexander@amelkin.msk.ru>
+FRU Generator v1.4.xx.gXXXXXXX (C) 2016-2023, Alexander Amelkin <alexander@amelkin.msk.ru>
 
 Usage: frugen [options] <filename>
 
@@ -131,6 +128,7 @@ Options:
 
 	-C, --chassis-custom <argument>
 		Add a custom chassis information field, may be used multiple times.
+		NOTE: This does NOT replace the data specified in the template.
 
 	-n, --board-pname <argument>
 		Set board product name.
@@ -156,6 +154,7 @@ Options:
 
 	-B, --board-custom <argument>
 		Add a custom board information field, may be used multiple times.
+		NOTE: This does NOT replace the data specified in the template.
 
 	-N, --prod-name <argument>
 		Set product name.
@@ -179,10 +178,12 @@ Options:
 		Set product Asset Tag.
 
 	-P, --prod-custom <argument>
-		Add a custom product information field, may be used multiple times.
+		Add a custom product information field, may be used multiple times
+		NOTE: This does NOT replace the data specified in the template.
 
 	-U, --mr-uuid <argument>
-		Set System Unique ID (UUID/GUID).
+		Set System Unique ID (UUID/GUID)
+		NOTE: This does NOT replace the data specified in the template.
 
 Example (encode):
 	frugen --board-mfg "Biggest International Corp." \
