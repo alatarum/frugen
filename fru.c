@@ -502,11 +502,11 @@ bool fru_decode_data(fru_field_t *field,
  * Calculate zero checksum for command header and FRU areas
  */
 static
-uint8_t calc_checksum(void *blk, size_t blk_bytes)
+int calc_checksum(void *blk, size_t blk_bytes)
 {
 	if (!blk || blk_bytes == 0) {
 		printf("Null pointer or zero buffer length\n");
-		exit(1);
+		return -1;
 	}
 
 	uint8_t *data = (uint8_t *)blk;
@@ -516,7 +516,7 @@ uint8_t calc_checksum(void *blk, size_t blk_bytes)
 		checksum += data[i];
 	}
 
-	return (uint8_t)( -(int8_t)checksum);
+	return (int)(uint8_t)(-(int8_t)checksum);
 }
 
 /**
@@ -528,7 +528,7 @@ uint8_t calc_checksum(void *blk, size_t blk_bytes)
  * is ok or non-zero otherwise.
  *
  */
-uint8_t fru_area_checksum(fru_info_area_t *area)
+int fru_area_checksum(fru_info_area_t *area)
 {
 	return calc_checksum(area, (area->blocks * FRU_BLOCK_SZ));
 }
@@ -1030,6 +1030,7 @@ int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
 			uint8_t node[6];
 		};
 	} uuid;
+	int cksum;
 
 	// Need a valid non-allocated record pointer and a string
 	if (!rec || *rec) return -EFAULT;
@@ -1086,10 +1087,16 @@ int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
 	*rec = (fru_mr_rec_t *)mgmt;
 
 	// Checksum the data
-	mgmt->hdr.rec_checksum = calc_checksum((*rec)->data, mgmt->hdr.len);
+	cksum = calc_checksum((*rec)->data, mgmt->hdr.len);
+	if (cksum < 0)
+		return -ERANGE;
+	mgmt->hdr.rec_checksum = (uint8_t)cksum;
 
 	// Checksum the header, don't include the checksum byte itself
-	mgmt->hdr.hdr_checksum = calc_checksum(*rec, sizeof(fru_mr_header_t) - 1);
+	cksum = calc_checksum(*rec, sizeof(fru_mr_header_t) - 1);
+	if (cksum < 0)
+		return -ERANGE;
+	mgmt->hdr.hdr_checksum = (uint8_t)cksum;
 	return 0;
 }
 
@@ -1170,7 +1177,12 @@ fru_mr_area_t *fru_mr_area(fru_mr_reclist_t *reclist, size_t *total)
 			// checksum byte itself.
 			size_t checksum_span = sizeof(fru_mr_header_t) - 1;
 			rec->hdr.eol_ver |= FRU_MR_EOL;
-			rec->hdr.hdr_checksum = calc_checksum(rec, checksum_span);
+			int cksum = calc_checksum(rec, checksum_span);
+			if (cksum < 0) {
+				free(area);
+				return NULL;
+			}
+			rec->hdr.hdr_checksum = (uint8_t)cksum;
 		}
 		rec = (void *)rec + rec_sz;
 		listitem = listitem->next;
@@ -1268,6 +1280,7 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 	};
 	fru_t *out = NULL;
 	int i;
+	int cksum;
 
 	// First calculate the total size of the FRU information storage file to
 	// be allocated.
@@ -1306,7 +1319,9 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 	}
 
 	// Calcute header checksum
-	fruhdr.hchecksum = calc_checksum(&fruhdr, sizeof(fruhdr));
+	cksum = calc_checksum(&fruhdr, sizeof(fruhdr));
+	if (cksum < 0) return NULL;
+	fruhdr.hchecksum = (uint8_t)cksum;
 	out = calloc(1, FRU_BYTES(totalblocks));
 
 	DEBUG("alocated a buffer at %p\n", out);
@@ -1336,6 +1351,7 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 }
 
 fru_t *find_fru_header(uint8_t *buffer, size_t size) {
+	int cksum;
 	if (size < 8) {
 		errno = ENOBUFS;
 		return NULL;
@@ -1348,7 +1364,8 @@ fru_t *find_fru_header(uint8_t *buffer, size_t size) {
 		errno = EPROTO;
 		return NULL;
 	}
-	if (header->hchecksum != calc_checksum(header, sizeof(fru_t) - 1)) {
+	cksum = calc_checksum(header, sizeof(fru_t) - 1);
+	if (cksum < 0 || header->hchecksum != (uint8_t)cksum) {
 		errno = EPROTO;
 		return NULL;
 	}
@@ -1358,6 +1375,7 @@ fru_t *find_fru_header(uint8_t *buffer, size_t size) {
 #define AREA(NAME) \
 fru_##NAME##_area_t *find_fru_##NAME##_area(uint8_t *buffer, size_t size) { \
 	fru_t *header = find_fru_header(buffer, size); \
+	int cksum; \
 	if ((header == NULL) || (header->NAME == 0)) { \
 		return NULL; \
 	} \
@@ -1375,8 +1393,9 @@ fru_##NAME##_area_t *find_fru_##NAME##_area(uint8_t *buffer, size_t size) { \
 		errno = ENOBUFS; \
 		return NULL; \
 	} \
-	if (*(((uint8_t *)area) + FRU_BYTES(area->blocks) - 1) != \
-	    calc_checksum(((uint8_t *)area), FRU_BYTES(area->blocks) - 1)) { \
+	cksum = calc_checksum(((uint8_t *)area), FRU_BYTES(area->blocks) - 1); \
+	if (cksum < 0 || *(((uint8_t *)area) + FRU_BYTES(area->blocks) - 1) != \
+	                 (uint8_t)cksum) { \
 		errno = EPROTO; \
 		return NULL; \
 	} \
