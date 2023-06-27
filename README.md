@@ -89,6 +89,13 @@ Options:
 	-v, --verbose
 		Increase program verbosity (debug) level.
 
+	-g, --debug <argument>
+		Set debug flag (use multiple times for multiple flags):
+			fver  - Ignore wrong version in FRU header
+			aver  - Ignore wrong version in area headers
+			rver  - Ignore wrong verison in multirecord area record version
+			asum  - Ignore wrong area checksum (for standard areas)
+
 	-b, --binary
 		Mark the next --*-custom option's argument as binary.
 		Use hex string representation for the next custom argument.

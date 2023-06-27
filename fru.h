@@ -15,6 +15,21 @@
 #include <sys/time.h>
 
 #define ARRAY_SZ(a) (sizeof(a) / sizeof((a)[0]))
+#define FRU_BIT(x) (1 << (x))
+
+/** Flags to FRU decoding functions */
+typedef enum {
+	FRU_NOFLAGS = 0,
+	FRU_IGNFVER = FRU_BIT(0), /// Ignore FRU version (in FRU header)
+	FRU_IGNFHCKSUM = FRU_BIT(1), /// Ignore FRU header checksum
+	FRU_IGNFDCKSUM = FRU_BIT(2), /// Ignore FRU data checksum
+	FRU_IGNAVER = FRU_BIT(3), /// Ignore area version
+	FRU_IGNRVER = FRU_BIT(4), /// Ignore record version (for multirecord area)
+	FRU_IGNACKSUM = FRU_BIT(5), /// Ignore area checksum
+	FRU_IGNRHCKSUM = FRU_BIT(6), /// Ignore record header checksum (for multirecord area)
+	FRU_IGNRDCKSUM = FRU_BIT(7), /// Ignore record data checksum (for multirecord area)
+	FRU_IGNRNOEOL = FRU_BIT(8), /// Ignore no EOL-flagged record, use any previous valid records
+} fru_flags_t;
 
 typedef struct fru_s {
 	uint8_t ver:4, rsvd:4;
@@ -391,7 +406,7 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size);
  * @return Pointer to the FRU header in the buffer.
  * @retval NULL FRU header not found. \p errno is set accordingly.
  */
-fru_t *find_fru_header(uint8_t *buffer, size_t size);
+fru_t *find_fru_header(uint8_t *buffer, size_t size, fru_flags_t flags);
 
 /**
  * @brief Find and validate FRU chassis area in the byte buffer.
@@ -401,7 +416,7 @@ fru_t *find_fru_header(uint8_t *buffer, size_t size);
  * @return Pointer to the FRU chassis area in the buffer.
  * @retval NULL FRU chassis area not found. \p errno is set accordingly.
  */
-fru_chassis_area_t *find_fru_chassis_area(uint8_t *buffer, size_t size);
+fru_chassis_area_t *find_fru_chassis_area(uint8_t *buffer, size_t size, fru_flags_t flags);
 
 /**
  * @brief Find and validate FRU board area in the byte buffer.
@@ -411,7 +426,7 @@ fru_chassis_area_t *find_fru_chassis_area(uint8_t *buffer, size_t size);
  * @return Pointer to the FRU board area in the buffer.
  * @retval NULL FRU board area not found. \p errno is set accordingly.
  */
-fru_board_area_t *find_fru_board_area(uint8_t *buffer, size_t size);
+fru_board_area_t *find_fru_board_area(uint8_t *buffer, size_t size, fru_flags_t flags);
 
 /**
  * @brief Find and validate FRU product area in the byte buffer.
@@ -421,7 +436,7 @@ fru_board_area_t *find_fru_board_area(uint8_t *buffer, size_t size);
  * @return Pointer to the FRU product area in the buffer.
  * @retval NULL FRU product area not found. \p errno is set accordingly.
  */
-fru_product_area_t *find_fru_product_area(uint8_t *buffer, size_t size);
+fru_product_area_t *find_fru_product_area(uint8_t *buffer, size_t size, fru_flags_t flags);
 
 /**
  * @brief Decode chassis area into \p fru_exploded_chassis_t.

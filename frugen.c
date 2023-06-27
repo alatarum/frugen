@@ -503,6 +503,9 @@ int main(int argc, char *argv[])
 		/* Increase verbosity */
 		{ .name = "verbose",       .val = 'v', .has_arg = false },
 
+		/* Set debug flags */
+		{ .name = "debug",         .val = 'g', .has_arg = true },
+
 		/* Mark the following '*-custom' data as binary */
 		{ .name = "binary",        .val = 'b', .has_arg = false },
 
@@ -550,6 +553,11 @@ int main(int argc, char *argv[])
 	const char *option_help[] = {
 		['h'] = "Display this help",
 		['v'] = "Increase program verbosity (debug) level",
+		['g'] = "Set debug flag (use multiple times for multiple flags):\n\t\t"
+		        "\tfver  - Ignore wrong version in FRU header\n\t\t"
+			    "\taver  - Ignore wrong version in area headers\n\t\t"
+			    "\trver  - Ignore wrong verison in multirecord area record version\n\t\t"
+			    "\tasum  - Ignore wrong area checksum (for standard areas)\n\t\t",
 		['b'] = "Mark the next --*-custom option's argument as binary.\n\t\t"
 			    "Use hex string representation for the next custom argument.\n"
 			    "\n\t\t"
@@ -589,6 +597,7 @@ int main(int argc, char *argv[])
 		['U'] = "Set System Unique ID (UUID/GUID)",
 	};
 
+	fru_flags_t flags = FRU_NOFLAGS;
 	bool has_chassis  = false,
 	     has_board    = false,
 	     has_bdate    = false,
@@ -626,6 +635,28 @@ int main(int argc, char *argv[])
 				debug_level++;
 				debug(debug_level, "Verbosity level set to %d", debug_level);
 				break;
+			case 'g': { // debug flag
+				struct {
+					const char * name;
+					int value;
+				} all_flags[] = {
+					{ "fver", FRU_IGNFVER },
+					{ "aver", FRU_IGNAVER },
+					{ "rver", FRU_IGNRVER },
+					{ "fhsum", FRU_IGNFHCKSUM },
+					{ "fdsum", FRU_IGNFDCKSUM },
+					{ "asum", FRU_IGNACKSUM },
+				};
+				debug(2, "Checking debug flag %s", optarg);
+				for (size_t i = 0; i < ARRAY_SZ(all_flags); i++) {
+					if (strcmp(all_flags[i].name, optarg))
+						continue;
+					flags |= all_flags[i].value;
+					debug(2, "Debug flag accepted: %s", optarg);
+					break;
+				}
+				break;
+			}
 			case 'h': // help
 				printf("FRU Generator %s (c) %s, "
 					   "Alexander Amelkin <alexander@amelkin.msk.ru>\n",
@@ -802,7 +833,7 @@ int main(int argc, char *argv[])
 					close(fd);
 
 					fru_chassis_area_t *chassis_area =
-						find_fru_chassis_area(buffer, statbuf.st_size);
+						find_fru_chassis_area(buffer, statbuf.st_size, flags);
 					if (chassis_area) {
 						debug(2, "Found a chassis area");
 						if (!fru_decode_chassis_info(chassis_area, &chassis))
@@ -810,7 +841,7 @@ int main(int argc, char *argv[])
 						has_chassis = true;
 					}
 					fru_board_area_t *board_area =
-						find_fru_board_area(buffer, statbuf.st_size);
+						find_fru_board_area(buffer, statbuf.st_size, flags);
 					if (board_area) {
 						debug(2, "Found a board area");
 						if (!fru_decode_board_info(board_area, &board))
@@ -819,7 +850,7 @@ int main(int argc, char *argv[])
 					}
 
 					fru_product_area_t *product_area =
-						find_fru_product_area(buffer, statbuf.st_size);
+						find_fru_product_area(buffer, statbuf.st_size, flags);
 					if (product_area) {
 						debug(2, "Found a product area");
 						if (!fru_decode_product_info(product_area, &product))

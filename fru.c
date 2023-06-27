@@ -1350,7 +1350,7 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 	return out;
 }
 
-fru_t *find_fru_header(uint8_t *buffer, size_t size) {
+fru_t *find_fru_header(uint8_t *buffer, size_t size, fru_flags_t flags) {
 	int cksum;
 	if (size < 8) {
 		errno = ENOBUFS;
@@ -1362,19 +1362,25 @@ fru_t *find_fru_header(uint8_t *buffer, size_t size) {
 	    || (header->pad != 0))
 	{
 		errno = EPROTO;
-		return NULL;
+		if (!(flags & FRU_IGNFVER))
+			return NULL;
 	}
 	cksum = calc_checksum(header, sizeof(fru_t) - 1);
 	if (cksum < 0 || header->hchecksum != (uint8_t)cksum) {
 		errno = EPROTO;
-		return NULL;
+		if (!(flags & FRU_IGNFHCKSUM))
+			return NULL;
 	}
 	return header;
 }
 
 #define AREA(NAME) \
-fru_##NAME##_area_t *find_fru_##NAME##_area(uint8_t *buffer, size_t size) { \
-	fru_t *header = find_fru_header(buffer, size); \
+fru_##NAME##_area_t *find_fru_##NAME##_area(uint8_t *buffer,\
+                                            size_t size,\
+                                            fru_flags_t flags\
+                                            )\
+{ \
+	fru_t *header = find_fru_header(buffer, size, flags); \
 	int cksum; \
 	if ((header == NULL) || (header->NAME == 0)) { \
 		return NULL; \
@@ -1387,7 +1393,8 @@ fru_##NAME##_area_t *find_fru_##NAME##_area(uint8_t *buffer, size_t size) { \
 	    (fru_##NAME##_area_t *)(buffer + FRU_BYTES(header->NAME)); \
 	if (area->ver != FRU_VER_1) { \
 		errno = EPROTO; \
-		return NULL; \
+		if (!(flags & FRU_IGNAVER)) \
+			return NULL; \
 	} \
 	if (FRU_BYTES(header->NAME) + FRU_BYTES(area->blocks) > size) { \
 		errno = ENOBUFS; \
@@ -1397,7 +1404,8 @@ fru_##NAME##_area_t *find_fru_##NAME##_area(uint8_t *buffer, size_t size) { \
 	if (cksum < 0 || *(((uint8_t *)area) + FRU_BYTES(area->blocks) - 1) != \
 	                 (uint8_t)cksum) { \
 		errno = EPROTO; \
-		return NULL; \
+		if (!(flags & FRU_IGNACKSUM)) \
+			return NULL; \
 	} \
 	return area; \
 }
