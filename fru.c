@@ -382,6 +382,23 @@ bool fru_decode_bcdplus(const fru_field_t *field,
 	return true;
 }
 
+static inline
+uint8_t nibble2hex(uint8_t n)
+{
+	return (n > 9 ? n - 10 + 'A': n + '0');
+}
+
+static
+void byte2hex(void *buf, uint8_t byte)
+{
+	uint8_t *str = buf;
+	if (!str) return;
+
+	str[0] = nibble2hex((byte & 0xf0) >> 4);
+	str[1] = nibble2hex(byte & 0x0f);
+	str[2] = 0;
+}
+
 /**
  * @brief Get a hex string representation of the supplied binary field.
  *
@@ -397,18 +414,14 @@ bool fru_decode_binary(const fru_field_t *field,
                        size_t out_len)
 {
 	size_t i;
-	uint8_t c;
 
 	if ((FRU_FIELDDATALEN(field->typelen) * 2 + 1) > out_len)
 		return false;
 
+	/* byte2hex() automatically terminates the string */
 	for (i = 0; i < FRU_FIELDDATALEN(field->typelen); i++) {
-		c = (field->data[i] & 0xf0) >> 4;
-		out[2 * i] = c > 9? c - 10 + 'A': c + '0';
-		c = field->data[i] & 0xf;
-		out[2 * i + 1] = c > 9? c - 10 + 'A': c + '0';
+		byte2hex(out + 2 * i, field->data[i]);
 	}
-	out[i * 2 + 1] = '0';
 
 	return true;
 }
@@ -998,9 +1011,27 @@ fru_product_area_t * fru_encode_product_info(const fru_exploded_product_t *produ
 	return out;
 }
 
-/**
- * Check if the multirecord are record is valid
- */
+/* These are used for uuid2rec and rec2uuid */
+#define UUID_SIZE 16
+#define UUID_STRLEN_NONDASHED (UUID_SIZE * 2) // 2 hex digits for byte
+#define UUID_STRLEN_DASHED (UUID_STRLEN_NONDASHED + 4)
+
+#pragma pack(push,1)
+typedef union __attribute__((packed)) {
+	uint8_t raw[UUID_SIZE];
+	// The structure is according to DMTF SMBIOS 3.2 Specification
+	struct __attribute__((packed)) {
+		// All words and dwords here must be Little-Endian for SMBIOS
+		uint32_t time_low;
+		uint16_t time_mid;
+		uint16_t time_hi_and_version;
+		uint8_t clock_seq_hi_and_reserved;
+		uint8_t clock_seq_low;
+		uint8_t node[6];
+	};
+} uuid_t;
+#pragma pack(pop)
+
 static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
 {
 	int cksum;
@@ -1045,38 +1076,11 @@ static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
 	return true;
 }
 
-/**
- * Take an input string, check that it looks like UUID, and pack it into
- * an "exploded" multirecord area record in binary form.
- *
- * @returns An errno-like negative error code
- * @retval 0        Success
- * @retval EINVAL   Invalid UUID string (wrong length, wrong symbols)
- * @retval EFAULT   Invalid pointer
- * @retval >0       any other error that calloc() is allowed to retrun
- */
 int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
 {
 	size_t len;
 	fru_mr_mgmt_rec_t *mgmt = NULL;
-
-	const size_t UUID_SIZE = 16;
-	const size_t UUID_STRLEN_NONDASHED = UUID_SIZE * 2; // 2 hex digits for byte
-	const size_t UUID_STRLEN_DASHED = UUID_STRLEN_NONDASHED + 4;
-
-	union __attribute__((packed)) {
-		uint8_t raw[UUID_SIZE];
-		// The structure is according to DMTF SMBIOS 3.2 Specification
-		struct __attribute__((packed)) {
-			// All words and dwords here must be Little-Endian for SMBIOS
-			uint32_t time_low;
-			uint16_t time_mid;
-			uint16_t time_hi_and_version;
-			uint8_t clock_seq_hi_and_reserved;
-			uint8_t clock_seq_low;
-			uint8_t node[6];
-		};
-	} uuid;
+	uuid_t uuid;
 	int cksum;
 
 	// Need a valid non-allocated record pointer and a string
@@ -1095,6 +1099,11 @@ int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
 	mgmt->hdr.eol_ver = FRU_MR_VER;
 	mgmt->hdr.len = UUID_SIZE + 1; // Include the subtype byte
 	mgmt->subtype = FRU_MR_MGMT_SYS_UUID;
+
+	/*
+	 * Fill in uuid.raw with bytes encoded from the input string
+	 * as they come from left to right. The result is Big Endian.
+	 */
 	while(*str) {
 		static size_t i = 0;
 		int val;
@@ -1144,6 +1153,50 @@ int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
 	if (cksum < 0)
 		return -ERANGE;
 	mgmt->hdr.hdr_checksum = (uint8_t)cksum;
+	return 0;
+}
+
+int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *mgmt, fru_flags_t flags)
+{
+	size_t i;
+	uuid_t uuid;
+
+	if (!mgmt || !str) {
+		return -EFAULT;
+	}
+
+	/* Is this really a Management System UUID record? */
+	if (FRU_MR_MGMT_ACCESS != mgmt->hdr.type_id
+	    || FRU_MR_VER != (mgmt->hdr.eol_ver & FRU_MR_VER_MASK)
+	    || (UUID_SIZE + 1) != mgmt->hdr.len
+	    || FRU_MR_MGMT_SYS_UUID != mgmt->subtype)
+	{
+		return -EINVAL;
+	}
+
+	errno = 0;
+	if (!is_mr_rec_valid((fru_mr_rec_t *)mgmt, SIZE_MAX, flags)) {
+		return -errno;
+	}
+
+	*str = calloc(1, UUID_STRLEN_NONDASHED + 1);
+	if (!str) return -errno;
+
+	/* This is the reversed operation of uuid2rec, SMBIOS-compatible
+	 * Little-Endian encoding in the input record is assumed.
+	 * The resulting raw data will be Big Endian */
+	memcpy(uuid.raw, mgmt->data, UUID_SIZE);
+	uuid.time_hi_and_version = htobe16(le16toh(uuid.time_hi_and_version));
+	uuid.time_low = htobe32(le32toh(uuid.time_low));
+	uuid.time_mid = htobe16(le16toh(uuid.time_mid));
+
+	/* Now convert the Big Endian byte array into a non-dashed UUID string.
+	 * byte2hex() automatically terminates the string.
+	 */
+	for (i = 0; i < sizeof(uuid.raw); ++i) {
+		byte2hex(*str + i * 2, uuid.raw[i]);
+	}
+
 	return 0;
 }
 

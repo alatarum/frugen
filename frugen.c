@@ -459,10 +459,69 @@ bool json_from_mr_reclist(json_object **jso,
 
 	while (item) {
 		fru_mr_rec_t *rec = item->rec;
+		// Pointers to static strings, depending on the found record
+		char *type = NULL;
+		char *subtype = NULL;
+		char *key = NULL;
+		// Pointer to an allocated string to be freed at the end of iteration
+		char *val = NULL;
 
 		switch (rec->hdr.type_id) {
+			case FRU_MR_MGMT_ACCESS: {
+				fru_mr_mgmt_rec_t *mgmt = (fru_mr_mgmt_rec_t *)rec;
+				int rc;
+				switch (mgmt->subtype) {
+				case FRU_MR_MGMT_SYS_UUID:
+					if ((rc = fru_mr_rec2uuid(&val, mgmt, flags))) {
+						printf("Could not decode the UUID record: %s\n",
+						       strerror(-rc));
+						break;
+					}
+					type = "management";
+					subtype = "uuid";
+					key = "uuid";
+					break;
+				default:
+					debug(1, "Multirecord Management subtype 0x%02X is not yet supported",
+					      mgmt->subtype);
+				}
+				break;
+			}
 			default:
 				debug(1, "Multirecord type 0x%02X is not yet supported", rec->hdr.type_id);
+		}
+
+		if (type && subtype && key && val) {
+			struct json_object *val_string, *type_string, *subtype_string, *entry;
+			val_string = json_object_new_string((const char *)val);
+			if (val) // We don't need it anymore, it's in val_string already
+				free(val);
+			if (NULL == val_string) {
+				printf("Failed to allocate a JSON string for MR record value");
+				goto out;
+			}
+			if ((type_string = json_object_new_string((const char *)type)) == NULL) {
+				printf("Failed to allocate a JSON string for MR record type");
+				json_object_put(val_string);
+				goto out;
+			}
+			if ((subtype_string = json_object_new_string((const char *)subtype)) == NULL) {
+				printf("Failed to allocate a JSON string for MR record subtype");
+				json_object_put(type_string);
+				json_object_put(val_string);
+				goto out;
+			}
+			if ((entry = json_object_new_object()) == NULL) {
+				printf("Failed to allocate a new JSON entry for MR record");
+				json_object_put(subtype_string);
+				json_object_put(type_string);
+				json_object_put(val_string);
+				goto out;
+			}
+			json_object_object_add(entry, "type", type_string);
+			json_object_object_add(entry, "subtype", subtype_string);
+			json_object_object_add(entry, key, val_string);
+			json_object_array_add(mr_jso, entry);
 		}
 
 		item = item->next;

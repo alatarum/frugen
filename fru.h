@@ -364,6 +364,24 @@ fru_product_area_t * fru_product_info(const fru_exploded_product_t *product);
  * @retval >0       any errno that calloc() is allowed to set
  */
 int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str);
+
+/**
+ * Take an "exploded" multirecord area record in binary form and convert
+ * it into a canonical UUID string if it's a Management UUID record
+ * or return an error otherwise.
+ *
+ * @param[in,out] str  Pointer to a string to be allocated and filled in with
+ *                     the decoded UUID
+ * @param[in]     rec  Pointer to the input Management UUID record to decode
+ * @returns An errno-like negative error code
+ * @retval 0        Success
+ * @retval -EINVAL  Not a UUID record
+ * @retval -EFAULT  Invalid pointer
+ * @rerval -ERANGE  Checksum error on record header or data
+ * @retval >0       any errno that calloc() is allowed to set
+ */
+int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *rec, fru_flags_t flags);
+
 fru_mr_reclist_t * add_mr_reclist(fru_mr_reclist_t **reclist);
 
 /**
