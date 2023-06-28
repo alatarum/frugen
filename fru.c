@@ -999,6 +999,53 @@ fru_product_area_t * fru_encode_product_info(const fru_exploded_product_t *produ
 }
 
 /**
+ * Check if the multirecord are record is valid
+ */
+static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
+{
+	int cksum;
+
+	/* The record must have some data to be valid */
+	if (!rec || limit <= sizeof(fru_mr_rec_t)) {
+		errno = EFAULT;
+		return false;
+	}
+
+	/*
+	 * Each record that is not EOL must have a valid
+	 * version, as well as valid checksums
+	 */
+	if (!IS_FRU_MR_VALID_VER(rec)) {
+		errno = EPROTO;
+		if (!(flags & FRU_IGNRVER))
+			return false;
+	}
+
+	/* Check the header checksum, checksum byte included into header */
+	cksum = calc_checksum(rec, sizeof(fru_mr_header_t));
+	if (cksum) {
+		errno = EPROTO;
+		if (!(flags & FRU_IGNRHCKSUM))
+			return false;
+	}
+
+	if (FRU_MR_REC_SZ(rec) > limit) {
+		errno = ENOBUFS;
+		return false;
+	}
+
+	/* Check the data checksum, checksum byte not included into data */
+	cksum = calc_checksum(rec->data, rec->hdr.len);
+	if (cksum != (int)rec->hdr.rec_checksum) {
+		errno = EPROTO;
+		if (!(flags & FRU_IGNRDCKSUM))
+			return false;
+	}
+
+	return true;
+}
+
+/**
  * Take an input string, check that it looks like UUID, and pack it into
  * an "exploded" multirecord area record in binary form.
  *
@@ -1129,25 +1176,7 @@ fru_mr_reclist_t *add_mr_reclist(fru_mr_reclist_t **reclist)
 	return rec;
 }
 
-/**
- * Allocate and build a MultiRecord area block.
- *
- * The function will allocate a buffer of size that is required to store all
- * the provided data and accompanying record headers. It will calculate data
- * and header checksums automatically.
- *
- * All data will be copied as-is, without any additional encoding.
- *
- * It is safe to free (deallocate) any arguments supplied to this function
- * immediately after the call as all the data is copied to the new buffer.
- *
- * Don't forget to free() the returned buffer when you don't need it anymore.
- *
- * @returns fru_mr_area_t *area  A newly allocated buffer containing the
- *                               created area
- *
- */
-fru_mr_area_t *fru_mr_area(fru_mr_reclist_t *reclist, size_t *total)
+fru_mr_area_t *fru_encode_mr_area(fru_mr_reclist_t *reclist, size_t *total)
 {
 	fru_mr_area_t *area = NULL;
 	fru_mr_rec_t *rec;
@@ -1412,6 +1441,148 @@ fru_##NAME##_area_t *find_fru_##NAME##_area(uint8_t *buffer,\
 AREA(chassis);
 AREA(board);
 AREA(product);
+
+
+static
+fru_mr_rec_t* fru_mr_next_rec(fru_mr_rec_t* rec, size_t limit,
+                              fru_flags_t flags)
+{
+	if (!is_mr_rec_valid(rec, limit, flags))
+		return NULL;
+
+	if (IS_FRU_MR_END(rec))
+		return NULL;
+
+	return (void *)rec + FRU_MR_REC_SZ(rec);
+}
+
+static
+size_t fru_mr_area_size(fru_mr_area_t *area, size_t limit, fru_flags_t flags)
+{
+	size_t size = 0;
+	fru_mr_rec_t *rec = (fru_mr_rec_t *)area;
+
+	/*
+	 * The multirecord area does not have a separate area header,
+	 * it is just a bunch of records, each with a separate header,
+	 * following each another until there are no more valid records.
+	 * So walk through and calculate the total size.
+	 */
+	while (rec) {
+		if (!is_mr_rec_valid(rec, limit - size, flags)) {
+			if (flags & FRU_IGNRNOEOL)
+				return size;
+			return 0;
+		}
+		size += FRU_MR_REC_SZ(rec);
+
+		if (IS_FRU_MR_END(rec))
+			break;
+
+		rec = (void *)area + size;
+	}
+
+	if (!size) {
+		errno = ENODATA;
+	}
+
+	return size;
+}
+
+fru_mr_area_t *find_fru_mr_area(uint8_t *buffer, size_t *mr_size, size_t size,
+                                fru_flags_t flags)
+{
+	size_t limit;
+	fru_t *header;
+
+	if (!mr_size) {
+		errno = EFAULT;
+		return NULL;
+	}
+	header = find_fru_header(buffer, size, flags);
+	if (!header || !header->multirec) {
+		return NULL;
+	}
+	if (FRU_BYTES(header->multirec) + sizeof(fru_mr_rec_t) > size) {
+		errno = ENOBUFS;
+		return NULL;
+	}
+	fru_mr_area_t *area =
+	    (fru_mr_area_t *)(buffer + FRU_BYTES(header->multirec));
+
+	limit = size - ((uint8_t *)header - buffer);
+	errno = 0;
+	*mr_size = fru_mr_area_size(area, limit, flags);
+	if (!*mr_size)
+	{
+		if (!errno)
+			errno = ENODATA;
+		return NULL;
+	}
+
+	return area;
+}
+
+int fru_decode_mr_area(const fru_mr_area_t *area,
+                       fru_mr_reclist_t **reclist,
+                       size_t mr_size,
+                       fru_flags_t flags)
+{
+	fru_mr_rec_t *srec = (fru_mr_rec_t *)area;
+	fru_mr_rec_t *rec;
+	fru_mr_reclist_t *mr_reclist_tail = NULL;
+	size_t total = 0;
+	int count = -1;
+	int err = 0;
+
+	if (!reclist) {
+		err = EFAULT;
+		goto out;
+	}
+
+	if (*reclist) {
+		/* The code below expects an empty reclist */
+		err = EINVAL;
+		goto out;
+	}
+
+	while (srec) {
+		size_t rec_sz = FRU_MR_REC_SZ(srec);
+		if (!is_mr_rec_valid(srec, mr_size - total, flags)) {
+			count = -1;
+			break;
+		}
+		rec = calloc(1, rec_sz);
+		if (!rec) {
+			count = -1;
+			err = errno;
+			break;
+		}
+		memmove(rec, srec, rec_sz);
+
+		mr_reclist_tail = add_mr_reclist(reclist);
+		if (!mr_reclist_tail) {
+			count = -1;
+			break;
+		}
+		mr_reclist_tail->rec = rec;
+
+		srec = fru_mr_next_rec(srec, mr_size - total, flags);
+		total += rec_sz;
+		count = (count < 0) ? 1 : count + 1;
+	}
+
+out:
+	if (count < 0) {
+		if (*reclist) {
+			free_reclist(*reclist);
+			*reclist = NULL;
+		}
+		errno = err;
+	}
+
+	return count;
+}
 
 #ifdef __STANDALONE__
 

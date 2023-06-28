@@ -95,6 +95,9 @@ Options:
 			aver  - Ignore wrong version in area headers
 			rver  - Ignore wrong verison in multirecord area record version
 			asum  - Ignore wrong area checksum (for standard areas)
+			rhsum - Ignore wrong record header checksum (for multirecord)
+			rdsum - Ignore wrong data checksum (for multirecord)
+			rend  - Ignore missing EOL record, use any found records.
 
 	-b, --binary
 		Mark the next --*-custom option's argument as binary.

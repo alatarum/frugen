@@ -234,8 +234,12 @@ typedef struct {
 
 typedef struct {
 	fru_mr_header_t hdr;
+#define IS_FRU_MR_END(rec) ((rec)->hdr.eol_ver & FRU_MR_EOL)
+#define IS_FRU_MR_VALID_VER(rec) \
+            (((rec)->hdr.eol_ver & FRU_MR_VER_MASK) == FRU_MR_VER)
 	uint8_t data[];        ///< Raw data of size `len`
 } __attribute__((packed)) fru_mr_rec_t;
+#define FRU_MR_REC_SZ(rec) (sizeof(fru_mr_rec_t) + (rec)->hdr.len)
 
 typedef struct {
 	fru_mr_header_t hdr;
@@ -347,9 +351,18 @@ fru_chassis_area_t * fru_chassis_info(const fru_exploded_chassis_t *chassis);
 fru_board_area_t * fru_board_info(const fru_exploded_board_t *board);
 fru_product_area_t * fru_product_info(const fru_exploded_product_t *product);
 
+/**
+ * Take an input string, check that it looks like UUID, and pack it into
+ * an "exploded" multirecord area record in binary form.
+ *
+ * @returns An errno-like negative error code
+ * @retval 0        Success
+ * @retval -EINVAL  Invalid UUID string (wrong length, wrong symbols)
+ * @retval -EFAULT  Invalid pointer
+ * @retval >0       any errno that calloc() is allowed to set
+ */
 int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str);
 fru_mr_reclist_t * add_mr_reclist(fru_mr_reclist_t **reclist);
-fru_mr_area_t * fru_mr_area(fru_mr_reclist_t *reclist, size_t *total);
 
 /**
  * @brief Encode chassis info into binary buffer.
@@ -383,6 +396,28 @@ fru_board_area_t * fru_encode_board_info(const fru_exploded_board_t *board);
  * @retval NULL Encoding failed. \p errno is set accordingly.
  */
 fru_product_area_t * fru_encode_product_info(const fru_exploded_product_t *product);
+
+/**
+ * Allocate and build a MultiRecord area block.
+ *
+ * The function will allocate a buffer of size that is required to store all
+ * the provided data and accompanying record headers. It will calculate data
+ * and header checksums automatically.
+ *
+ * All data will be copied as-is, without any additional encoding, the name
+ * `encode` is given for consistency with the functions that build
+ * other areas.
+ *
+ * It is safe to free (deallocate) any arguments supplied to this function
+ * immediately after the call as all the data is copied to the new buffer.
+ *
+ * Don't forget to free() the returned buffer when you don't need it anymore.
+ *
+ * @returns fru_mr_area_t *area  A newly allocated buffer containing the
+ *                               created area
+ *
+ */
+fru_mr_area_t * fru_encode_mr_area(fru_mr_reclist_t *reclist, size_t *total);
 
 /**
  * @brief Encode data field.
@@ -439,6 +474,21 @@ fru_board_area_t *find_fru_board_area(uint8_t *buffer, size_t size, fru_flags_t 
 fru_product_area_t *find_fru_product_area(uint8_t *buffer, size_t size, fru_flags_t flags);
 
 /**
+ * Find a multirecord area in the supplied FRU \a buffer of the
+ * given \a size.
+ *
+ * @param[in]  buffer   Pointer to the FRU data
+ * @param[in]  size     Size of the FRU \a buffer
+ * @param[out] mr_size  Detected size of the found Multirecord area
+ * @param[in]  flags    Debug flags to skip certain checks
+ *
+ * @returns A pointer to the multi-record area within the \a buffer
+ * @retval NULL An error has occured, errno indicates the problem
+ * @retval non-NULL A pointer to the found multi-record area start
+ */
+fru_mr_area_t *find_fru_mr_area(uint8_t *buffer, size_t *mr_size, size_t size, fru_flags_t flags);
+
+/**
  * @brief Decode chassis area into \p fru_exploded_chassis_t.
  *
  * @param[in] area Encoded area.
@@ -467,6 +517,20 @@ bool fru_decode_board_info(const fru_board_area_t *area, fru_exploded_board_t *b
  * @retval false Failure.
  */
 bool fru_decode_product_info(const fru_product_area_t *area, fru_exploded_product_t *product_out);
+
+/**
+ * @brief Decode multirecord area from \p fru_mr_area_t into a record list
+ *
+ * @param[in] area Encoded area.
+ * @param[out] mr_reclist Pointer to the record list head
+ * @returns The number of records decoded from the multirecord are into the list
+ * @retval -1 - Failure, errno is set accordingly.
+ * @retval >= 0 - The number of records added to \a mr_reclist
+ */
+int fru_decode_mr_area(const fru_mr_area_t *area,
+                       fru_mr_reclist_t **reclist,
+                       size_t mr_size,
+                       fru_flags_t flags);
 
 /**
  * Decode data from a buffer into another buffer.

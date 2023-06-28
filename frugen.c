@@ -429,6 +429,55 @@ out:
 	return has_multirec;
 }
 
+/**
+ * Allocate a multirecord area json object \a jso and build it from
+ * the supplied multirecord area record list \a mr_reclist
+ */
+static
+bool json_from_mr_reclist(json_object **jso,
+                          const fru_mr_reclist_t *mr_reclist,
+                          fru_flags_t flags)
+{
+	bool rc = false;
+	json_object *mr_jso = NULL;
+	const fru_mr_reclist_t *item = mr_reclist;
+
+	if (!mr_reclist)
+		goto out;
+
+	if (!jso)
+		goto out;
+
+	mr_jso = json_object_new_array();
+	if (!mr_jso) {
+		printf("Failed to allocate a new JSON array for multirecord area\n");
+		goto out;
+	}
+
+	if (json_object_get_type(mr_jso) != json_type_array)
+		goto out;
+
+	while (item) {
+		fru_mr_rec_t *rec = item->rec;
+
+		switch (rec->hdr.type_id) {
+			default:
+				debug(1, "Multirecord type 0x%02X is not yet supported", rec->hdr.type_id);
+		}
+
+		item = item->next;
+	}
+
+	rc = true;
+out:
+	if (!rc && mr_jso) {
+		json_object_put(mr_jso);
+		mr_jso = NULL;
+	}
+	*jso = mr_jso;
+	return rc;
+}
+
 static
 int json_object_add_with_type(struct json_object* obj,
                               const char* key,
@@ -474,6 +523,7 @@ int main(int argc, char *argv[])
 
 	fru_t *fru;
 	size_t size;
+	size_t mr_size;
 
 	bool cust_binary = false; // Flag: treat the following custom attribute as binary
 	bool no_curr_date = false; // Flag: don't use current timestamp if no 'date' is specified
@@ -557,7 +607,10 @@ int main(int argc, char *argv[])
 		        "\tfver  - Ignore wrong version in FRU header\n\t\t"
 			    "\taver  - Ignore wrong version in area headers\n\t\t"
 			    "\trver  - Ignore wrong verison in multirecord area record version\n\t\t"
-			    "\tasum  - Ignore wrong area checksum (for standard areas)\n\t\t",
+			    "\tasum  - Ignore wrong area checksum (for standard areas)\n\t\t"
+			    "\trhsum - Ignore wrong record header checksum (for multirecord)\n\t\t"
+			    "\trdsum - Ignore wrong data checksum (for multirecord)\n\t\t"
+			    "\trend  - Ignore missing EOL record, use any found records",
 		['b'] = "Mark the next --*-custom option's argument as binary.\n\t\t"
 			    "Use hex string representation for the next custom argument.\n"
 			    "\n\t\t"
@@ -646,6 +699,9 @@ int main(int argc, char *argv[])
 					{ "fhsum", FRU_IGNFHCKSUM },
 					{ "fdsum", FRU_IGNFDCKSUM },
 					{ "asum", FRU_IGNACKSUM },
+					{ "rhsum", FRU_IGNRHCKSUM },
+					{ "rdsum", FRU_IGNRDCKSUM },
+					{ "rend", FRU_IGNRNOEOL },
 				};
 				debug(2, "Checking debug flag %s", optarg);
 				for (size_t i = 0; i < ARRAY_SZ(all_flags); i++) {
@@ -826,12 +882,13 @@ int main(int argc, char *argv[])
 						fatal("Cannot allocate buffer");
 					}
 
-					debug(2, "Reading the template file...");
+					debug(2, "Reading the template file of size %zd...", statbuf.st_size);
 					if (read(fd, buffer, statbuf.st_size) != statbuf.st_size) {
 						fatal("Cannot read file");
 					}
 					close(fd);
 
+					errno = 0;
 					fru_chassis_area_t *chassis_area =
 						find_fru_chassis_area(buffer, statbuf.st_size, flags);
 					if (chassis_area) {
@@ -840,6 +897,11 @@ int main(int argc, char *argv[])
 							fatal("Failed to decode chassis");
 						has_chassis = true;
 					}
+					else {
+						debug(2, "No chassis area found: %s", strerror(e));
+					}
+
+					errno = 0;
 					fru_board_area_t *board_area =
 						find_fru_board_area(buffer, statbuf.st_size, flags);
 					if (board_area) {
@@ -848,7 +910,11 @@ int main(int argc, char *argv[])
 							fatal("Failed to decode board");
 						has_board = true;
 					}
+					else {
+						debug(2, "No board area found");
+					}
 
+					errno = 0;
 					fru_product_area_t *product_area =
 						find_fru_product_area(buffer, statbuf.st_size, flags);
 					if (product_area) {
@@ -856,6 +922,26 @@ int main(int argc, char *argv[])
 						if (!fru_decode_product_info(product_area, &product))
 							fatal("Failed to decode product");
 						has_product = true;
+					}
+					else {
+						debug(2, "No product area found");
+					}
+
+					errno = 0;
+					mr_size = 0;
+					fru_mr_area_t *mr_area =
+						find_fru_mr_area(buffer, &mr_size, statbuf.st_size, flags);
+					if (mr_area) {
+						int rec_cnt;
+						debug(2, "Found a multirecord area of size %zd", mr_size);
+						rec_cnt = fru_decode_mr_area(mr_area, &mr_reclist, mr_size, flags);
+						if (0 > rec_cnt)
+							fatal("Failed to decode multirecord area");
+						debug(2, "Loaded %d records from the multirecord area", rec_cnt);
+						has_multirec = true;
+					}
+					else {
+						debug(2, "No multirecord area found: %s", strerror(e));
 					}
 
 					free(buffer);
@@ -1072,7 +1158,9 @@ int main(int argc, char *argv[])
 			json_object_object_add(json_root, "board", section);
 		}
 		if (has_multirec) {
-			// TODO: add multirec dump
+			json_object *jso = NULL;
+			json_from_mr_reclist(&jso, mr_reclist, flags);
+			json_object_object_add(json_root, "multirecord", jso);
 		}
 		// dump to stdout
 		json_object_to_fd(fileno(stdout), json_root,
@@ -1212,7 +1300,7 @@ int main(int argc, char *argv[])
 			size_t totalbytes = 0;
 			debug(1, "FRU file will have a multirecord area");
 			debug(3, "Multirecord area record list is %p", mr_reclist);
-			mr = fru_mr_area(mr_reclist, &totalbytes);
+			mr = fru_encode_mr_area(mr_reclist, &totalbytes);
 
 			e = errno;
 			free_reclist(mr_reclist);
