@@ -180,8 +180,8 @@ static inline fru_reclist_t *add_reclist(fru_reclist_t **reclist)
 
 /// Works both for fru_reclist_t* and for fru_mr_reclist_t*
 #define free_reclist(recp) while(recp) { \
-	typeof(recp->next) next = recp->next; \
-	free(recp->rec); \
+	typeof((recp)->next) next = (recp)->next; \
+	free((recp)->rec); \
 	free(recp); \
 	recp = next; \
 }
@@ -221,6 +221,7 @@ typedef struct fru_board_area_s {
 
 typedef fru_info_area_t fru_product_area_t;
 
+#pragma pack(push, 1)
 typedef struct {
 	uint8_t type_id; ///< Record Type ID
 	uint8_t eol_ver;
@@ -253,6 +254,7 @@ typedef struct fru_mr_reclist_s {
 } fru_mr_reclist_t;
 
 typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
+#pragma pack(pop)
 
 #define FRU_AREA_HAS_DATE(t) (FRU_BOARD_INFO == (t))
 #define FRU_DATE_AREA_HEADER_SZ sizeof(fru_board_area_t)
