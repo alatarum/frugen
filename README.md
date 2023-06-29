@@ -217,8 +217,24 @@ which is an extension to the standard JSON format.
 
 ### Linux
 
-    cmake .
+    mkdir build && cd build
+    cmake ..
     make
+
+There are number of optional parameters for cmake to control build procedure:
+* BUILD_SHARED_LIB - build libfru as a shared library (default ON)
+* BINARY_STATIC - link all libs static when compile frugen (default OFF)
+* BINARY_32BIT - compile 32bit version (default OFF)
+* DEBUG_OUTPUT - show extra debug output (default OFF)
+
+Note that BUILD_SHARED_LIB and BINARY_STATIC are not mutually exclusive: while first option
+controls building libfru, second one is related to frugen. When both options are enabled
+static and shared versions of libfru will be compiled. When both options are disabled libfru
+will be linked statically into frugen, while other libraries are linked shared.
+
+E.g. to compile debug version use the following command:
+
+    cmake -DCMAKE_BUILD_TYPE=Debug -DDEBUG_OUTPUT=yes .. && make
 
 ### Windows (cross-compiled on Linux)
 
@@ -245,7 +261,7 @@ for all mingw32-compiled libraries (e.g., libjson-c).
     SET(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32/ ${MINGW32_INSTALL_DIR})
 
     # adjust the default behaviour of the FIND_XXX() commands:
-    # search headers and libraries in the target environment, search 
+    # search headers and libraries in the target environment, search
     # programs in the host environment
     set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
     set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
