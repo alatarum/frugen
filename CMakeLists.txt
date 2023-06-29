@@ -31,7 +31,14 @@ option(BINARY_32BIT "compile 32bit version" OFF)
 option(DEBUG_OUTPUT "show extra debug output" OFF)
 option(DEBUG_SYMBOLS "compile with debug symbols" OFF)
 option(DEBUG_NO_OPTIMIZE "do not optimize the code" OFF)
-option(COMPILER_WARNINGS "show compiler warnings" ON)
+
+if(MSVC)
+    # warning level 4
+    add_compile_options(/W4)
+else(MSVC)
+    # additional warnings
+    add_compile_options(-Wall -Wextra -Wunreachable-code)
+endif(MSVC)
 
 if(DEBUG_OUTPUT)
   add_definitions(-DDEBUG)
@@ -79,12 +86,6 @@ endif(JSON_LIB)
 
 # set additional params
 foreach(TARGET IN LISTS ALL_TARGETS)
- if(COMPILER_WARNINGS)
-    if(CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
-      target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Wunreachable-code)
-    endif()
-  endif(COMPILER_WARNINGS)
-
   # To make frugen 32-bit, set BINARY_32BIT or use an external toolchain file
   if(BINARY_32BIT)
     set_target_properties(${TARGET} PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
