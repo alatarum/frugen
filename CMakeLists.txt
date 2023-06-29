@@ -91,3 +91,10 @@ foreach(TARGET IN LISTS ALL_TARGETS)
     set_target_properties(${TARGET} PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
   endif(BINARY_32BIT)
 endforeach()
+
+# install targets
+install(TARGETS frugen RUNTIME DESTINATION bin)
+if(BUILD_SHARED_LIB)
+  install(TARGETS fru-shared DESTINATION lib)
+  install(FILES fru.h DESTINATION include)
+endif(BUILD_SHARED_LIB)
