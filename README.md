@@ -232,7 +232,7 @@ controls building libfru, second one is related to frugen. When both options are
 static and shared versions of libfru will be compiled. When both options are disabled libfru
 will be linked statically into frugen, while other libraries are linked shared.
 
-E.g. to compile debug version use the following command:
+To compile debug version use the following command:
 
     cmake -DCMAKE_BUILD_TYPE=Debug -DDEBUG_OUTPUT=yes .. && make
 
