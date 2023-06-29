@@ -955,7 +955,7 @@ int main(int argc, char *argv[])
 						fatal("Cannot allocate buffer");
 					}
 
-					debug(2, "Reading the template file of size %zd...", statbuf.st_size);
+					debug(2, "Reading the template file of size %lu...", statbuf.st_size);
 					if (read(fd, buffer, statbuf.st_size) != statbuf.st_size) {
 						fatal("Cannot read file");
 					}
