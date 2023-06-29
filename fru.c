@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <inttypes.h>
 
 #define _BSD_SOURCE
 #include <endian.h>
@@ -247,7 +248,7 @@ fru_field_t *fru_encode_6bit(const unsigned char *s /**< [in] Input string */)
 		// Space is zero, maximum is 0x3F (6 significant bits)
 		char c = (s[i] - ' ') & 0x3F;
 
-		DEBUG("%d:%d = %c -> %02hhX\n", byte, i6, s[i], c);
+		DEBUG("%d:%zu = %c -> %02hhX\n", byte, i6, s[i], c);
 		switch(byte) {
 			case 0:
 				out->data[i6] = c;
@@ -300,7 +301,7 @@ bool fru_decode_6bit(const fru_field_t *field,
 	for(i = 0, i6 = 0; i6 <= len6bit && i < len && s6[i6]; i++) {
 		int byte = i % 4;
 
-		DEBUG("%d:%d = ", byte, i6);
+		DEBUG("%d:%zu = ", byte, i6);
 
 		switch(byte) {
 			case 0:
@@ -1406,7 +1407,7 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 	fruhdr.hchecksum = (uint8_t)cksum;
 	out = calloc(1, FRU_BYTES(totalblocks));
 
-	DEBUG("alocated a buffer at %p\n", out);
+	DEBUG("allocated a buffer at %p\n", out);
 	if (!out) return NULL;
 
 	memcpy(out, (uint8_t *)&fruhdr, sizeof(fruhdr));
@@ -1423,8 +1424,8 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 
 		if (!blocks) continue;
 
-		DEBUG("copying %d bytes of area of type %d to offset 0x%03X (0x%03lX)\n",
-		      FRU_BYTES(blocks), atype, FRU_BYTES(*offset), dst - (uint8_t *)out);
+		DEBUG("copying %d bytes of area of type %d to offset 0x%03X (%p)\n",
+		      FRU_BYTES(blocks), atype, FRU_BYTES(*offset), dst);
 		memcpy(dst, data, FRU_BYTES(blocks));
 	}
 
