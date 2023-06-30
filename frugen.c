@@ -59,29 +59,38 @@ int typelen2ind(uint8_t field) {
 }
 
 static
-void hexdump(const void *data, size_t len)
+void hexdump(const char *prefix, const void *data, size_t len)
 {
 	size_t i;
 	const unsigned char *buf = data;
+	const size_t perline = 16;
+	char printable[perline + 1];
 
 	for (i = 0; i < len; ++i) {
-		if (0 == (i % 16))
-			printf("DEBUG: %04x: ", (unsigned int)i);
+		if (0 == (i % perline)) {
+			memset(printable, 0, sizeof(printable));
+			printf("%s%04x: ", prefix, (unsigned int)i);
+		}
 
 		printf("%02X ", buf[i]);
+		printable[i % perline] = isprint(buf[i]) ? buf[i] : '.';
 
-		if (15 == (i % 16))
-			printf("\n");
+		if (perline - 1  == (i % perline)) {
+			printf("| %s\n", printable);
+		}
 	}
 
 	if (i % 16) {
-		printf("\n");
+		const size_t spaces_per_byte = 3; // Size of result of "%02X " above
+		const size_t remains_bytes = perline - (i % perline);
+		const size_t remains_spaces = remains_bytes * spaces_per_byte;
+		printf("%*c| %s\n", (int)remains_spaces, ' ', printable);
 	}
 }
 
 #define debug_dump(level, data, len, fmt, args...) do { \
 	debug(level, fmt, ##args); \
-	if (level <= debug_level) hexdump(data, len); \
+	if (level <= debug_level) hexdump("DEBUG: ", data, len); \
 } while(0)
 
 /**
@@ -1278,7 +1287,18 @@ int main(int argc, char *argv[])
 		}
 
 		if (has_multirec) {
-			// TODO: add multirec dump
+			fru_mr_reclist_t *entry = mr_reclist;
+			size_t count = 0;
+			puts("Multirecord");
+			puts("\tNOTE: Data decoding is not available without JSON support");
+
+			while (entry) {
+				printf("\trecord %03zd:\n", count++);
+				hexdump("\t\t", entry->rec, FRU_MR_REC_SZ(entry->rec));
+				if (IS_FRU_MR_END(entry->rec))
+					break;
+				entry = entry->next;
+			}
 		}
 #endif
 	} else {
