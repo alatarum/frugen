@@ -952,8 +952,8 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 
 		if(!data ||                                // No data is provided or
 		   !FRU_AREA_HAS_SIZE(atype) && !blocks || // no size is given for a non-sized area or
-		   !((fru_info_area_t *)data)->blocks     // the sized area contains a zero size
-		  ) {
+		   FRU_AREA_HAS_SIZE(atype) && !((fru_info_area_t *)data)->blocks) // the sized area contains a zero size
+		{
 			// Mark the area as
 			*offset = 0;
 			continue;
