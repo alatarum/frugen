@@ -25,6 +25,7 @@
 #include <time.h>
 #include <errno.h>
 #include <limits.h>
+#include <ctype.h>
 #include "fru.h"
 #include "smbios.h"
 
