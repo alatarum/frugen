@@ -282,6 +282,5 @@ Once you have that file, build the tool as follows:
 
 Should you have any questions or proposals, please feel free to:
 
- * Ask a question via https://github.com/ipmitool/frugen/discussions
- * Submit changes as a pull request via https://github.com/ipmitool/frugen/pulls
- * Report a problem by creating an issue at https://github.com/ipmitool/frugen/issues
+ * Submit changes as a pull request via https://codeberg.org/IPMITool/frugen/pulls
+ * Report a problem by creating an issue at https://codeberg.org/IPMITool/frugen/issues
