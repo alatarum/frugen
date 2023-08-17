@@ -100,6 +100,61 @@ typedef enum {
 	FRU_MR_MAX = 0xFF
 } fru_mr_type_t;
 
+/// Table 18-1, Power Supply Information
+#pragma pack(push, 1)
+typedef struct {
+	uint16_t overall_cap;
+#define FRU_MR_PSU_OCAP_MAX ((1 << 12) - 1)
+#define FRU_MR_PSU_OCAP_MASK FRU_MR_PSU_OCAP_MAX
+	uint16_t peak_va;
+#define FRU_MR_PSU_PEAK_VA_UNSPEC 0xFFFF
+	uint8_t inrush_amp;
+#define FRU_MR_PSU_INRUSH_AMP_UNSPEC 0xFF
+	uint8_t inrush_ms;
+#define FRU_MR_PSU_INRUSH_MS_UNSPEC 0
+	int16_t lo_vin1;
+	int16_t hi_vin1;
+	int16_t lo_vin2;
+	int16_t hi_vin2;
+#define FRU_MR_PSU_VIN_SINGLE_RANGE 0
+#define FRU_MR_PSU_VIN_RANGE_STEP_mV 10
+	uint8_t lo_freq;
+#define FRU_MR_PSU_LFREQ_ACCEPTS_DC 0
+	uint8_t hi_freq;
+#define FRU_MR_PSU_HFREQ_DC_ONLY 0
+	uint8_t dropout_tolerance_ms;
+	uint8_t flags;
+#define FRU_MR_PSU_FLAGS_PREFAIL_SUPPORT (1 << 0)
+#define FRU_MR_PSU_FLAGS_PF_CORRECTION (1 << 1)
+#define FRU_MR_PSU_FLAGS_AUTOSWITCH (1 << 2)
+#define FRU_MR_PSU_FLAGS_HOTSWAP (1 << 3)
+#define FRU_MR_PSU_FLAGS_TACH_PPR (1 << 4)
+#define   FRU_MR_PSU_TACH_PPR(x) (((x)->flags & FRU_MR_PSU_FLAGS_TACH_PPR) ? 2 : 1)
+#define FRU_MR_PSU_FLAGS_PREFAIL_POL FRU_MR_PSU_FLAGS_TACH_PPR
+	uint16_t peak_watts_holdup;
+#define FRU_MR_PSU_HOLDUP_SHIFT 12
+#define FRU_MR_PSU_HOLDUP(x) ((x)->peak_watts_holdup >> FRU_MR_PSU_HOLDUP_SHIFT)
+#define FRU_MR_PSU_PEAK_WATTS_MASK ((1 << FRU_MR_PSU_HOLDUP_SHIFT) - 1)
+#define FRU_MR_PSU_PEAK_WATTS(x) ((x)->peak_watts_holdup & FRU_MR_PSU_PEAK_WATTS_MASK)
+#define FRU_MR_PSU_PEAK_WATTS_UNSPEC FRU_MR_PSU_PEAK_WATTS_MASK
+	struct {
+		uint8_t per_range;
+#define FRU_MR_PSU_WATTS_RANGE1_SHIFT 4
+#define FRU_MR_PSU_WATTS_RANGE2_SHIFT 0
+#define FRU_MR_PSU_WATTS_MASK ((1 << FRU_MR_PSU_WATTS_RANGE1_SHIFT) - 1)
+#define FRU_MR_PSU_WATTS_RANGE(x, r) ( \
+        	( \
+        		((x)->combined_watts.per_range) >> FRU_MR_PSU_WATTS_RANGE##r##_SHIFT \
+        	) & FRU_MR_PSU_WATTS_MASK \
+        )
+		uint16_t total;
+	} __attribute__((packed)) combined_watts;
+	uint8_t prefail_tach_rps;
+#define FRU_MR_PSU_PREFAIL_BINARY 0x00
+#define FRU_MR_PSU_PREFAIL_RPM(x) (((x)->prefail_tach_rps) * 60) // RPS to RPM conversion
+} __attribute__((packed)) fru_mr_psu_t;
+#pragma pack(pop)
+
 /// Table 18-6, Management Access Record
 typedef enum {
 	FRU_MR_MGTM_MIN = 0x01,

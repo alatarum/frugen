@@ -497,6 +497,9 @@ bool json_from_mr_reclist(json_object **jso,
 				}
 				break;
 			}
+			case FRU_MR_PSU_INFO:
+				debug(1, "Found a PSU info record (not yet supported, skipped)");
+				break;
 			default:
 				debug(1, "Multirecord type 0x%02X is not yet supported", rec->hdr.type_id);
 		}
