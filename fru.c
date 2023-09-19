@@ -1116,7 +1116,6 @@ int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
 		}
 
 		if (!isxdigit(*str)) {
-			free(mgmt);
 			return -EINVAL;
 		}
 
@@ -1255,7 +1254,10 @@ fru_mr_area_t *fru_encode_mr_area(fru_mr_reclist_t *reclist, size_t *total)
 	while (listitem && listitem->rec && listitem->rec->hdr.len) {
 		size_t rec_sz = sizeof(fru_mr_header_t) + listitem->rec->hdr.len;
 		memcpy(rec, listitem->rec, rec_sz);
-		if (!listitem->next) {
+		if (!listitem->next
+		    || !listitem->next->rec
+		    || !listitem->next->rec->hdr.len)
+		{
 			// Update the header and its checksum. Don't include the
 			// checksum byte itself.
 			size_t checksum_span = sizeof(fru_mr_header_t) - 1;
