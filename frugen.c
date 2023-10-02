@@ -51,6 +51,38 @@ volatile int debug_level = 0;
 	}                                   \
 } while(0)
 
+static const char* fru_mr_mgmt_name[FRU_MR_MGMT_MAX] = {
+	[MGMT_TYPENAME_ID(SYS_URL)] = "surl",
+	[MGMT_TYPENAME_ID(SYS_NAME)] = "sname",
+	[MGMT_TYPENAME_ID(SYS_PING)] = "spingaddr",
+	[MGMT_TYPENAME_ID(COMPONENT_URL)] = "curl",
+	[MGMT_TYPENAME_ID(COMPONENT_NAME)] = "cname",
+	[MGMT_TYPENAME_ID(COMPONENT_PING)] = "cpingaddr",
+	[MGMT_TYPENAME_ID(SYS_UUID)] = "uuid"
+};
+
+fru_mr_mgmt_type_t fru_mr_mgmt_type_by_name(const char *name)
+{
+	off_t i;
+
+	if (!name)
+		fatal("FRU MR Management Record type not provided");
+
+	for (i = MGMT_TYPENAME_ID(MIN); i <= MGMT_TYPENAME_ID(MAX); i++) {
+		if (!strcmp(fru_mr_mgmt_name[i], name))
+			return i + FRU_MR_MGMT_MIN;
+	}
+	fatal("Invalid FRU MR Management Record type '%s'", name);
+}
+
+const char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
+{
+	if (type < FRU_MR_MGMT_MIN || type > FRU_MR_MGMT_MAX) {
+		fatal("FRU MR Management Record type %d is out of range", type);
+	}
+	return fru_mr_mgmt_name[MGMT_TYPE_ID(type)];
+}
+
 static
 int typelen2ind(uint8_t field) {
 	if (FIELD_TYPE_T(field) < TOTAL_FIELD_TYPES)

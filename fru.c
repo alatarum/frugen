@@ -51,6 +51,30 @@ const char* enc_names[TOTAL_FIELD_TYPES] = {
 	[FIELD_TYPE_TEXT] = "text"
 };
 
+/*
+ * Minimum and maximum lengths of values as per
+ * Table 18-6, Management Access Record
+ */
+static const size_t fru_mr_mgmt_minlen[FRU_MR_MGMT_MAX] = {
+	[MGMT_TYPENAME_ID(SYS_URL)] = 16,
+	[MGMT_TYPENAME_ID(SYS_NAME)] = 8,
+	[MGMT_TYPENAME_ID(SYS_PING)] = 8,
+	[MGMT_TYPENAME_ID(COMPONENT_URL)] = 16,
+	[MGMT_TYPENAME_ID(COMPONENT_NAME)] = 8,
+	[MGMT_TYPENAME_ID(COMPONENT_PING)] = 8,
+	[MGMT_TYPENAME_ID(SYS_UUID)] = 16
+};
+
+static const size_t fru_mr_mgmt_maxlen[FRU_MR_MGMT_MAX] = {
+	[MGMT_TYPENAME_ID(SYS_URL)] = 256,
+	[MGMT_TYPENAME_ID(SYS_NAME)] = 64,
+	[MGMT_TYPENAME_ID(SYS_PING)] = 64,
+	[MGMT_TYPENAME_ID(COMPONENT_URL)] = 256,
+	[MGMT_TYPENAME_ID(COMPONENT_NAME)] = 256,
+	[MGMT_TYPENAME_ID(COMPONENT_PING)] = 64,
+	[MGMT_TYPENAME_ID(SYS_UUID)] = 16
+};
+
 void fru_set_autodetect(bool enable)
 {
 	autodetect = enable;
@@ -1077,29 +1101,87 @@ static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
 	return true;
 }
 
-int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
+static int fru_mr_mgmt_blob2rec(fru_mr_rec_t **rec,
+                                const void *blob,
+                                size_t len,
+                                fru_mr_mgmt_type_t type)
 {
-	size_t len;
-	fru_mr_mgmt_rec_t *mgmt = NULL;
-	uuid_t uuid;
+	size_t min, max;
 	int cksum;
+	fru_mr_mgmt_rec_t *mgmt = NULL;
 
-	// Need a valid non-allocated record pointer and a string
+	// Need a valid non-allocated record pointer and a blob
 	if (!rec || *rec) return -EFAULT;
-	if (!str) return -EFAULT;
+	if (!blob) return -EFAULT;
 
-	len = strulen(str);
-	if(UUID_STRLEN_DASHED != len && UUID_STRLEN_NONDASHED != len) {
+	if (type < FRU_MR_MGMT_MIN || type > FRU_MR_MGMT_MAX)
 		return -EINVAL;
-	}
 
-	mgmt = calloc(1, sizeof(fru_mr_mgmt_rec_t) + UUID_SIZE);
+	min = fru_mr_mgmt_minlen[MGMT_TYPE_ID(type)];
+	max = fru_mr_mgmt_maxlen[MGMT_TYPE_ID(type)];
+
+	if (min > len || len > max)
+		return -EINVAL;
+
+	/* At this point we believe the input value is sane */
+
+	mgmt = calloc(1, sizeof(fru_mr_mgmt_rec_t) + len);
 	if (!mgmt) return errno;
 
 	mgmt->hdr.type_id = FRU_MR_MGMT_ACCESS;
 	mgmt->hdr.eol_ver = FRU_MR_VER;
-	mgmt->hdr.len = UUID_SIZE + 1; // Include the subtype byte
-	mgmt->subtype = FRU_MR_MGMT_SYS_UUID;
+	mgmt->hdr.len = len + 1; // Include the subtype byte
+	mgmt->subtype = type;
+	memcpy(mgmt->data, blob, len);
+
+	// Checksum the data
+	cksum = calc_checksum(((fru_mr_rec_t *)mgmt)->data,
+	                      mgmt->hdr.len);
+	if (cksum < 0) {
+		free(mgmt);
+		return -ERANGE;
+	}
+	mgmt->hdr.rec_checksum = (uint8_t)cksum;
+
+	// Checksum the header, don't include the checksum byte itself
+	cksum = calc_checksum(&mgmt->hdr,
+	                      sizeof(fru_mr_header_t) - 1);
+	if (cksum < 0) {
+		free(mgmt);
+		return -ERANGE;
+	}
+	mgmt->hdr.hdr_checksum = (uint8_t)cksum;
+
+	*rec = (fru_mr_rec_t *)mgmt;
+
+	return 0;
+}
+
+int fru_mr_mgmt_str2rec(fru_mr_rec_t **rec,
+                        const unsigned char *str,
+                        fru_mr_mgmt_type_t type)
+{
+	size_t len;
+
+	if (!str) return -EFAULT;
+
+	len = strulen(str);
+
+	return fru_mr_mgmt_blob2rec(rec, str, len, type);
+}
+
+int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
+{
+	size_t len;
+	uuid_t uuid;
+
+	if (!str) return -EFAULT;
+
+	len = strulen(str);
+
+	if(UUID_STRLEN_DASHED != len && UUID_STRLEN_NONDASHED != len) {
+		return -EINVAL;
+	}
 
 	/*
 	 * Fill in uuid.raw with bytes encoded from the input string
@@ -1138,22 +1220,9 @@ int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
 	uuid.time_low = htole32(be32toh(uuid.time_low));
 	uuid.time_mid = htole16(be16toh(uuid.time_mid));
 	uuid.time_hi_and_version = htole16(be16toh(uuid.time_hi_and_version));
-	memcpy(mgmt->data, uuid.raw, UUID_SIZE);
 
-	*rec = (fru_mr_rec_t *)mgmt;
-
-	// Checksum the data
-	cksum = calc_checksum((*rec)->data, mgmt->hdr.len);
-	if (cksum < 0)
-		return -ERANGE;
-	mgmt->hdr.rec_checksum = (uint8_t)cksum;
-
-	// Checksum the header, don't include the checksum byte itself
-	cksum = calc_checksum(*rec, sizeof(fru_mr_header_t) - 1);
-	if (cksum < 0)
-		return -ERANGE;
-	mgmt->hdr.hdr_checksum = (uint8_t)cksum;
-	return 0;
+	return fru_mr_mgmt_blob2rec(rec, &uuid.raw, sizeof(uuid),
+	                            FRU_MR_MGMT_SYS_UUID);
 }
 
 int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *mgmt, fru_flags_t flags)
@@ -1196,6 +1265,44 @@ int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *mgmt, fru_flags_t flags)
 	for (i = 0; i < sizeof(uuid.raw); ++i) {
 		byte2hex(*str + i * 2, uuid.raw[i]);
 	}
+
+	return 0;
+}
+
+int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
+                        fru_flags_t flags)
+{
+	size_t minsize, maxsize;
+
+	if (!mgmt || !str) {
+		return -EFAULT;
+	}
+
+	/* Is this really a Management Access record and not a UUID subtype? */
+	if (FRU_MR_MGMT_ACCESS != mgmt->hdr.type_id
+	    || FRU_MR_VER != (mgmt->hdr.eol_ver & FRU_MR_VER_MASK)
+	    || (FRU_MR_MGMT_MIN > mgmt->subtype)
+	    || (FRU_MR_MGMT_SYS_UUID <= mgmt->subtype))
+	{
+		return -EINVAL;
+	}
+
+	/* Is the management record data size valid? */
+	minsize = fru_mr_mgmt_minlen[MGMT_TYPE_ID(mgmt->subtype)];
+	maxsize = fru_mr_mgmt_maxlen[MGMT_TYPE_ID(mgmt->subtype)];
+	if (minsize > mgmt->hdr.len || mgmt->hdr.len > maxsize) {
+		return -EOVERFLOW;
+	}
+
+	errno = 0;
+	if (!is_mr_rec_valid((fru_mr_rec_t *)mgmt, SIZE_MAX, flags)) {
+		return -errno;
+	}
+
+	*str = calloc(1, mgmt->hdr.len + 1);
+	if (!*str) return -errno;
+
+	memcpy(*str, mgmt->data, mgmt->hdr.len);
 
 	return 0;
 }

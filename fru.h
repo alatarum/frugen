@@ -157,6 +157,7 @@ typedef struct {
 
 /// Table 18-6, Management Access Record
 typedef enum {
+	FRU_MR_MGMT_INVALID = 0x00,
 	FRU_MR_MGMT_MIN = 0x01,
 	FRU_MR_MGMT_SYS_URL = 0x01,
 	FRU_MR_MGMT_SYS_NAME = 0x02,
@@ -167,6 +168,8 @@ typedef enum {
 	FRU_MR_MGMT_SYS_UUID = 0x07,
 	FRU_MR_MGMT_MAX = 0x07,
 } fru_mr_mgmt_type_t;
+#define MGMT_TYPE_ID(type) ((type) - FRU_MR_MGMT_MIN)
+#define MGMT_TYPENAME_ID(name) MGMT_TYPE_ID(FRU_MR_MGMT_##name)
 
 #define FRU_IS_ATYPE_VALID(t) ((t) >= FRU_AREA_NOT_PRESENT && (t) < FRU_MAX_AREAS)
 
@@ -408,6 +411,26 @@ fru_chassis_area_t * fru_chassis_info(const fru_exploded_chassis_t *chassis);
 fru_board_area_t * fru_board_info(const fru_exploded_board_t *board);
 fru_product_area_t * fru_product_info(const fru_exploded_product_t *product);
 
+
+/**
+ * Take an input string and pack it into an "exploded" multirecord
+ * area "mmanagement access" record in binary form, using the
+ * provided subtype.
+ *
+ * As per IPMI FRU specifiation section 18.4, no validity checks
+ * are performed to restrict the values. Only the length is checked
+ * according to the subtype restrictions.
+ *
+ * @returns An errno-like negative error code
+ * @retval 0        Success
+ * @retval -EINVAL  Invalid UUID string (wrong length, wrong symbols)
+ * @retval -EFAULT  Invalid pointer
+ * @retval >0       any errno that calloc() is allowed to set
+ */
+int fru_mr_mgmt_str2rec(fru_mr_rec_t **rec,
+                        const unsigned char *str,
+                        fru_mr_mgmt_type_t subtype);
+
 /**
  * Take an input string, check that it looks like UUID, and pack it into
  * an "exploded" multirecord area record in binary form.
@@ -436,6 +459,25 @@ int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str);
  * @retval >0       any errno that calloc() is allowed to set
  */
 int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *rec, fru_flags_t flags);
+
+/**
+ * Take an "exploded" multirecord area record in binary form and convert
+ * it into a canonical C string if it's a Management Access record
+ * (except for Management Access System UUID record), or return an error
+ * otherwise.
+ *
+ * @param[in,out] str  Pointer to a string to be allocated and filled in with
+ *                     the string value of the management record
+ * @param[in]     rec  Pointer to the input Management Access record
+ * @returns An errno-like negative error code
+ * @retval 0        Success
+ * @retval -EINVAL  Not a valid Management Access record or a UUID record
+ * @retval -EFAULT  Invalid pointer
+ * @rerval -ERANGE  Checksum error on record header or data
+ * @retval >0       any errno that calloc() is allowed to set
+ */
+int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
+                        fru_flags_t flags);
 
 fru_mr_reclist_t * add_mr_reclist(fru_mr_reclist_t **reclist);
 
