@@ -374,12 +374,6 @@ bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
 		goto out;
 
 	debug(4, "Multirecord area record list is initially at %p", *mr_reclist);
-	mr_reclist_tail = add_mr_reclist(mr_reclist);
-	if (!mr_reclist_tail)
-		fatal("JSON: Failed to allocate multirecord area list");
-
-	debug(4, "Multirecord area record list is now at %p", *mr_reclist);
-	debug(4, "Multirecord area record list tail is at %p", mr_reclist_tail);
 
 	for (i = 0; i < alen; i++) {
 		const char *type = NULL;
@@ -396,6 +390,13 @@ bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
 		}
 
 		debug(3, "Record is of type '%s'", type);
+
+		mr_reclist_tail = add_mr_reclist(mr_reclist);
+		if (!mr_reclist_tail)
+			fatal("JSON: Failed to allocate multirecord area list");
+
+		debug(4, "Multirecord area record list is now at %p", *mr_reclist);
+		debug(4, "Multirecord area record list tail is at %p", mr_reclist_tail);
 
 		if (!strcmp(type, "management")) {
 			const char *subtype = NULL;
@@ -507,8 +508,10 @@ bool json_from_mr_reclist(json_object **jso,
 		if (type && subtype && key && val) {
 			struct json_object *val_string, *type_string, *subtype_string, *entry;
 			val_string = json_object_new_string((const char *)val);
-			if (val) // We don't need it anymore, it's in val_string already
+			if (val) { // We don't need it anymore, it's in val_string already
 				free(val);
+				val = NULL;
+			}
 			if (NULL == val_string) {
 				printf("Failed to allocate a JSON string for MR record value");
 				goto out;
@@ -538,6 +541,9 @@ bool json_from_mr_reclist(json_object **jso,
 		}
 
 		item = item->next;
+		if (val) {
+			free(val);
+		}
 	}
 
 	rc = true;
