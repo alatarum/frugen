@@ -33,6 +33,12 @@
 #include <json-c/json.h>
 #endif
 
+typedef enum {
+	FRUGEN_FMT_UNSET,
+	FRUGEN_FMT_JSON,
+	FRUGEN_FMT_BINARY,
+} format_t;
+
 #define fatal(fmt, args...) do {  \
 	fprintf(stderr, fmt, ##args); \
 	fprintf(stderr, "\n");        \
@@ -773,8 +779,7 @@ int main(int argc, char *argv[])
 	     has_multirec = false;
 	fru_mr_reclist_t *mr_reclist = NULL;
 
-	bool use_json = false; /* TODO: Add more input formats, consider libconfig */
-	bool use_binary = false;
+	format_t format = FRUGEN_FMT_UNSET;
 
 	char optstring[ARRAY_SZ(options) * 2 + 1] = {0};
 
@@ -858,24 +863,25 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'j': // json
-				use_json = true;
-				if (use_binary) {
-					fatal("Can't specify --json and --raw together");
-				}
+#ifdef __HAS_JSON__
+				format = FRUGEN_FMT_JSON;
+				debug(1, "Using JSON input format");
+#else
+				fatal("JSON support was not compiled in");
+#endif
 				break;
 
 			case 'r': // binary
-				use_binary = true;
-				if (use_json) {
-					fatal("Can't specify --json and --raw together");
-				}
+				format = FRUGEN_FMT_BINARY;
+				debug(1, "Using RAW binary input format");
 				break;
 
 			case 'z': // from
 				debug(2, "Will load FRU information from file %s", optarg);
 
-				if (use_json) {
+				switch(format) {
 #ifdef __HAS_JSON__
+				case FRUGEN_FMT_JSON: {
 					json_object *jstree, *jso, *jsfield;
 					json_object_iter iter;
 
@@ -972,11 +978,10 @@ int main(int argc, char *argv[])
 
 					/* Deallocate the JSON object */
 					json_object_put(jstree);
-#else
-					fatal("JSON support was disabled at compile time");
-#endif
-				}
-				else if (use_binary) {
+					break;
+					}
+#endif /* __HAS_JSON__ */
+				case FRUGEN_FMT_BINARY: {
 					int fd = open(optarg, O_RDONLY);
 					debug(2, "Data format is BINARY");
 					if (fd < 0) {
@@ -1059,9 +1064,11 @@ int main(int argc, char *argv[])
 					}
 
 					free(buffer);
-				}
-				else {
+					break;
+					}
+				default:
 					fatal("Please specify the input file format");
+					break;
 				}
 				break;
 
@@ -1204,7 +1211,8 @@ int main(int argc, char *argv[])
 		}
 	} while (opt != -1);
 
-	if (use_binary) {
+	switch (format) {
+	case FRUGEN_FMT_BINARY: {
 		char timebuf[20] = {0};
 		struct tm* bdtime = gmtime(&board.tv.tv_sec);
 		strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
@@ -1347,7 +1355,9 @@ int main(int argc, char *argv[])
 			}
 		}
 #endif
-	} else {
+		break;
+		}
+	default:
 		if (optind >= argc)
 			fatal("Filename must be specified");
 
