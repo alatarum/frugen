@@ -39,13 +39,19 @@ So far supported in libfru:
 
     * Management Access Record with the following subtypes:
 
-      * System UUID
+      * System UUID (uuid)
+      * System name (sname)
+      * System management URL (surl)
+      * System ping address (spingaddr)
+      * Component name (cname)
+      * Component management URL (curl)
+      * Component ping address (cpingaddr)
 
   * FRU file creation (in a memory buffer)
 
 _NOT supported:_
 
-  * Miltirecord area record types other than listed above
+  * Miltirecord area record types/subtypes other than listed above
   * Internal use area decoding
 
 ## frugen

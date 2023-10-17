@@ -438,12 +438,19 @@ bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
 
 		if (!strcmp(type, "management")) {
 			const char *subtype = NULL;
+			fru_mr_mgmt_type_t subtype_id;
 			json_object_object_get_ex(item, "subtype", &ifield);
 			if (!ifield || !(subtype = json_object_get_string(ifield))) {
 				fatal("Each management record must have a subtype");
 			}
 
 			debug(3, "Management record subtype is '%s'", subtype);
+			subtype_id = fru_mr_mgmt_type_by_name(subtype);
+			if (!subtype_id) {
+				fatal("Management record subtype '%s' is invalid", subtype);
+			}
+
+			debug(3, "Management record subtype ID is '%d'", subtype_id);
 
 			if (!strcmp(subtype, "uuid")) {
 				const unsigned char *uuid = NULL;
@@ -464,9 +471,31 @@ bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
 				has_multirec = true;
 			}
 			else {
-				fatal("Management Access Record type '%s' "
-				      "is not supported", subtype);
+				int err;
+				const unsigned char *val = NULL;
+				json_object_object_get_ex(item, subtype, &ifield);
+				if (ifield) {
+					val = (const unsigned char *)json_object_get_string(ifield);
+				}
+
+				if (!ifield || !val) {
+					fatal("Management record '%s' must have a '%s' field",
+					      subtype, subtype);
+				}
+
+				err = fru_mr_mgmt_str2rec(&mr_reclist_tail->rec,
+				                          val, subtype_id);
+				if (err) {
+					fatal("Failed to convert '%s' to a record: %s",
+						  subtype, strerror(err < 0 ? -err : err));
+				}
+				debug(2, "Loaded '%s' from JSON: %s", subtype, val);
+				has_multirec = true;
 			}
+		}
+		else if (!strcmp(type, "psu")) {
+			debug(1, "Found a PSU info record (not yet supported, skipped)");
+			continue;
 		}
 		else {
 			fatal("Multirecord type '%s' is not supported", type);
@@ -509,9 +538,9 @@ bool json_from_mr_reclist(json_object **jso,
 	while (item) {
 		fru_mr_rec_t *rec = item->rec;
 		// Pointers to static strings, depending on the found record
-		char *type = NULL;
-		char *subtype = NULL;
-		char *key = NULL;
+		const char *type = NULL;
+		const char *subtype = NULL;
+		const char *key = NULL;
 		// Pointer to an allocated string to be freed at the end of iteration
 		char *val = NULL;
 
@@ -519,6 +548,8 @@ bool json_from_mr_reclist(json_object **jso,
 			case FRU_MR_MGMT_ACCESS: {
 				fru_mr_mgmt_rec_t *mgmt = (fru_mr_mgmt_rec_t *)rec;
 				int rc;
+				type = "management";
+#define MGMT_TYPE_ID(type) ((type) - FRU_MR_MGMT_MIN)
 				switch (mgmt->subtype) {
 				case FRU_MR_MGMT_SYS_UUID:
 					if ((rc = fru_mr_rec2uuid(&val, mgmt, flags))) {
@@ -526,9 +557,22 @@ bool json_from_mr_reclist(json_object **jso,
 						       strerror(-rc));
 						break;
 					}
+					key = subtype = fru_mr_mgmt_name[MGMT_TYPE_ID(mgmt->subtype)];
+					break;
+				case FRU_MR_MGMT_SYS_URL:
+				case FRU_MR_MGMT_SYS_NAME:
+				case FRU_MR_MGMT_SYS_PING:
+				case FRU_MR_MGMT_COMPONENT_URL:
+				case FRU_MR_MGMT_COMPONENT_NAME:
+				case FRU_MR_MGMT_COMPONENT_PING:
+					if ((rc = fru_mr_mgmt_rec2str(&val, mgmt, flags))) {
+						printf("Could not decode the Mgmt Access record '%s': %s\n",
+						       fru_mr_mgmt_name[MGMT_TYPE_ID(mgmt->subtype)],
+						       strerror(-rc));
+						break;
+					}
 					type = "management";
-					subtype = "uuid";
-					key = "uuid";
+					key = subtype = fru_mr_mgmt_name[MGMT_TYPE_ID(mgmt->subtype)];
 					break;
 				default:
 					debug(1, "Multirecord Management subtype 0x%02X is not yet supported",

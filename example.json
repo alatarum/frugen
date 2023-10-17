@@ -54,6 +54,12 @@
 	},
 	"multirecord" : [
 		{ "type" : "management", "subtype" : "uuid", "uuid" : "9bd70799-ccf0-4915-a7f9-7ce7d64385cf" },
+		{ "type" : "management", "subtype" : "surl", "surl" : "http://coolsystem.company.domain" },
+		{ "type" : "management", "subtype" : "sname", "sname" : "Some very cool system" },
+		{ "type" : "management", "subtype" : "spingaddr", "spingaddr" : "172.17.33.11" },
+		{ "type" : "management", "subtype" : "curl", "curl" : "http://component.coolsystem.company.domain" },
+		{ "type" : "management", "subtype" : "cname", "cname" : "Some important component" },
+		{ "type" : "management", "subtype" : "cpingaddr", "cpingaddr" : "172.17.33.12" },
 		{ "type" : "psu",
 		  "capacity" : 2000,
 		  "peak_VA": 2500,
