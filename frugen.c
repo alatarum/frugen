@@ -1048,12 +1048,12 @@ int main(int argc, char *argv[])
 					int fd = open(optarg, O_RDONLY);
 					debug(2, "Data format is BINARY");
 					if (fd < 0) {
-						fatal("Failed to open file: %s", strerror(errno));
+						fatal("Failed to open file: %m");
 					}
 
 					struct stat statbuf = {0};
 					if (fstat(fd, &statbuf)) {
-						fatal("Failed to get file properties: %s", strerror(errno));
+						fatal("Failed to get file properties: %m");
 					}
 					if (statbuf.st_size > MAX_FILE_SIZE) {
 						fatal("File too large");
@@ -1080,7 +1080,7 @@ int main(int argc, char *argv[])
 						has_chassis = true;
 					}
 					else {
-						debug(2, "No chassis area found: %s", strerror(e));
+						debug(2, "No chassis area found: %m");
 					}
 
 					errno = 0;
@@ -1123,7 +1123,7 @@ int main(int argc, char *argv[])
 						has_multirec = true;
 					}
 					else {
-						debug(2, "No multirecord area found: %s", strerror(e));
+						debug(2, "No multirecord area found: %m");
 					}
 
 					free(buffer);
