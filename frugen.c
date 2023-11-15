@@ -700,6 +700,7 @@ int main(int argc, char *argv[])
 		{ .atype = FRU_MULTIRECORD }
 	};
 
+	uint8_t *internal_use = NULL;
 	fru_exploded_chassis_t chassis = { .type = SMBIOS_CHASSIS_UNKNOWN };
 	fru_exploded_board_t board = { .lang = LANG_ENGLISH };
 	fru_exploded_product_t product = { .lang = LANG_ENGLISH };
@@ -957,29 +958,20 @@ int main(int argc, char *argv[])
 					json_object_object_foreachC(jstree, iter) {
 						jso = iter.val;
 						if (!strcmp(iter.key, "internal")) {
-							fru_internal_use_area_t *internal;
+							size_t len;
 							const char *data = json_object_get_string(jso);
 							if (!data) {
 								debug(2, "Internal use are w/o data, skipping");
 								continue;
 							}
-							size_t datalen;
-							uint8_t *encoded_data =
-								fru_encode_binary_string(&datalen, data);
-							size_t blocklen = FRU_BLOCKS(datalen + sizeof(*internal));
-							internal = calloc(1, FRU_BYTES(blocklen));
-							if (!internal) {
-								fatal("Failed to allocate memory for internal use area");
-							}
-							internal->ver = FRU_VER_1;
-							memcpy(internal->data, encoded_data, datalen);
-							free(encoded_data);
-							areas[FRU_INTERNAL_USE].blocks = blocklen;
-							areas[FRU_INTERNAL_USE].data = internal;
+							len = strlen(data) + 1;
+							internal_use = calloc(1, len);
+							if (!internal_use)
+								fatal("Failed to allocate a buffer for internal use area");
 
-							debug(2, "Internal use area data loaded from JSON");
-
+							memmove(internal_use, data, len); /* `data` will be destroyed, can't use it */
 							has_internal = true;
+							debug(2, "Internal use area data loaded from JSON");
 							continue;
 						} else if (!strcmp(iter.key, "chassis")) {
 							const char *fieldname[] = { "pn", "serial" };
@@ -1069,6 +1061,23 @@ int main(int argc, char *argv[])
 						fatal("Cannot read file");
 					}
 					close(fd);
+
+					errno = 0;
+					size_t iu_size;
+					fru_internal_use_area_t *internal_area =
+						find_fru_internal_use_area(buffer, &iu_size,  statbuf.st_size, flags);
+					if (internal_area) {
+						debug(2, "Found an internal use area of size %zd", iu_size);
+
+						if (!fru_decode_internal_use_area(internal_area, iu_size, &internal_use, flags))
+							fatal("Failed to decode interal use area");
+
+						debug(2, "Internal use area: %s", internal_use);
+						has_internal = true;
+					}
+					else {
+						debug(2, "No internal use area found: %m");
+					}
 
 					errno = 0;
 					fru_chassis_area_t *chassis_area =
@@ -1323,6 +1332,13 @@ int main(int argc, char *argv[])
 			fatal("Failed to open file '%s' for writing: %m", fname);
 		}
 
+		if (has_internal) {
+			section = json_object_new_string((char *)internal_use);
+			free(internal_use);
+			internal_use = NULL;
+			json_object_object_add(json_root, "internal", section);
+		}
+
 		if (has_chassis) {
 			section = json_object_new_object();
 			temp_obj = json_object_new_int(chassis.type);
@@ -1404,6 +1420,19 @@ int main(int argc, char *argv[])
 			fatal("Failed to open file '%s' for writing: %m", fname);
 		}
 
+		if (has_internal) {
+			fru_internal_use_area_t *internal;
+			uint8_t *blocklen = &areas[FRU_INTERNAL_USE].blocks;
+			fputs("Internal use area", fp);
+			internal = fru_encode_internal_use_area(internal_use, blocklen);
+			if (!internal)
+				fatal("Failed to encode internal use area: %m\n"
+				      "Check that the value is a hex string of even bytes length");
+			free(internal_use);
+			internal_use = NULL;
+			fhexdump(fp, "\t", internal->data, FRU_BYTES(*blocklen));
+		}
+
 		if (has_chassis) {
 			fputs("Chassis", fp);
 			fprintf(fp, "\ttype: %u\n", chassis.type);
@@ -1478,9 +1507,16 @@ int main(int argc, char *argv[])
 	default:
 	case FRUGEN_FMT_BINARY:
 		if (has_internal) {
+			fru_internal_use_area_t *internal;
+			uint8_t *blocklen = &areas[FRU_INTERNAL_USE].blocks;
 			debug(1, "FRU file will have an internal use area");
-			/* Nothing to do here, added for uniformity, the actual
-			 * internal use area can only be initialized from file */
+			internal = fru_encode_internal_use_area(internal_use, blocklen);
+			if (!internal)
+				fatal("Failed to encode internal use area: %m\n"
+				      "Check that the value is a hex string of even bytes length");
+			free(internal_use);
+			internal_use = NULL;
+			areas[FRU_INTERNAL_USE].data = internal;
 		}
 
 		if (has_chassis) {
