@@ -482,6 +482,24 @@ int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
 fru_mr_reclist_t * add_mr_reclist(fru_mr_reclist_t **reclist);
 
 /**
+ * Allocate and build an Internal Use Area block.
+ *
+ * The function will allocate a buffer of size that is a muliple of 8 bytes
+ * and is big enough to accomodate the standard area header and the area data.
+ *
+ * It is safe to free (deallocate) any arguments supplied to this function
+ * immediately after the call as all the data is copied to the new buffer.
+ *
+ * Don't forget to free() the returned buffer when you don't need it anymore.
+ *
+ * @param[in] data The internal use area data as a hex string (e.g. "DEADBEEF")
+ * @param[out] blocks The size of the resulting area in FRU blocks
+ * @returns fru_internal_use_area_t *area A newly allocated buffer containing
+ *                                        the created area
+ */
+fru_internal_use_area_t *fru_encode_internal_use_area(const void *data, uint8_t *blocks);
+
+/**
  * @brief Encode chassis info into binary buffer.
  *
  * Binary buffer needs to be freed after use.
@@ -591,6 +609,23 @@ fru_board_area_t *find_fru_board_area(uint8_t *buffer, size_t size, fru_flags_t 
 fru_product_area_t *find_fru_product_area(uint8_t *buffer, size_t size, fru_flags_t flags);
 
 /**
+ * Find an Internal Use area in the supplied FRU \a buffer of the
+ * given \a size.
+ *
+ * @param[in]  buffer   Pointer to the FRU data
+ * @param[in]  size     Size of the FRU \a buffer
+ * @param[out] iu_size  Detected size of the found Internal Use area
+ * @param[in]  flags    Debug flags to skip certain checks
+ *
+ * @returns A pointer to the internal use area within the \a buffer, detected
+ *          size of the area is stored in \a iu_size.
+ * @retval NULL An error has occured, errno indicates the problem, \a iu_size equals 0
+ * @retval non-NULL A pointer to the found multi-record area start
+ */
+fru_internal_use_area_t *find_fru_internal_use_area(
+	uint8_t *buffer, size_t *ia_size, size_t size, fru_flags_t flags);
+
+/**
  * Find a multirecord area in the supplied FRU \a buffer of the
  * given \a size.
  *
@@ -648,6 +683,26 @@ int fru_decode_mr_area(const fru_mr_area_t *area,
                        fru_mr_reclist_t **reclist,
                        size_t mr_size,
                        fru_flags_t flags);
+
+/**
+ * @brief Decode internal use area \a area into a hex string
+ *
+ * The function allocates a string buffer that a caller must free()
+ * when not needed anymore.
+ *
+ * @param[in]  area     Encoded area.
+ * @param[in]  area_len The full area length as calculated by \p find_fru_internal_use_area()
+ * @param[out] out      Pointer to a string buffer to be allocated and filled in with the data
+ * @param[in]  flags    The debug flags (unused here)
+ * @returns The boolean success indicator
+ * @retval true  - Success
+ * @retval false - An error occured, errno is set accordingly
+ */
+bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
+                                  size_t area_len,
+                                  uint8_t **out,
+                                  fru_flags_t flags);
+
 
 /**
  * Decode data from a buffer into another buffer.

@@ -425,6 +425,40 @@ void byte2hex(void *buf, uint8_t byte)
 }
 
 /**
+ * @brief Get a hex string representation of the supplied raw binary buffer.
+ *
+ * Also performs the check to see if the result will fit into the
+ * output buffer. The output buffer must be twice as big as the input
+ * plus one byte for string termination.
+ *
+ * @param[in] in The binary buffer to decode.
+ * @param[in] in_len Length of the input data.
+ * @param[out] out Buffer to decode into.
+ * @param[in] out_len Length of output buffer.
+ * @retval true Success.
+ * @retval false Failure.
+ */
+static
+bool fru_decode_raw_binary(const void *in,
+                           size_t in_len,
+                           uint8_t *out,
+                           size_t out_len)
+{
+	size_t i;
+	const uint8_t *buffer = in;
+
+	if (in_len * 2 + 1 > out_len)
+		return false;
+
+	/* byte2hex() automatically terminates the string */
+	for (i = 0; i < in_len; i++) {
+		byte2hex(out + 2 * i, buffer[i]);
+	}
+
+	return true;
+}
+
+/**
  * @brief Get a hex string representation of the supplied binary field.
  *
  * @param[in] field Field to decode.
@@ -438,17 +472,10 @@ bool fru_decode_binary(const fru_field_t *field,
                        uint8_t *out,
                        size_t out_len)
 {
-	size_t i;
-
-	if ((FRU_FIELDDATALEN(field->typelen) * 2 + 1) > out_len)
-		return false;
-
-	/* byte2hex() automatically terminates the string */
-	for (i = 0; i < FRU_FIELDDATALEN(field->typelen); i++) {
-		byte2hex(out + 2 * i, field->data[i]);
-	}
-
-	return true;
+	return fru_decode_raw_binary(field->data,
+	                             FRU_FIELDDATALEN(field->typelen),
+	                             out,
+	                             out_len);
 }
 
 /**
@@ -787,6 +814,78 @@ bool fru_decode_custom_fields(const uint8_t *data,
 	}
 
 	return true;
+}
+
+/**
+ * Convert 2 bytes of hex string into a binary byte
+ */
+static
+int16_t hex2byte(const char *hex) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverride-init"
+	// First initialize the array with all FFs,
+	// then override the values for the bytes that
+	// are valid hexadecimal digits
+	static const int8_t hextable[256] = {
+		[0 ... 255] = -1,
+		['0'] = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+		['A'] = 10, 11, 12, 13, 14, 15,
+		['a'] = 10, 11, 12, 13, 14, 15
+	};
+#pragma GCC diagnostic pop
+
+	if (!hex) return -1;
+
+	int16_t hi = hextable[(off_t)hex[0]];
+	int16_t lo = hextable[(off_t)hex[1]];
+
+	if (hi < 0 || lo < 0)
+		return -1;
+
+	return ((hi << 4) | lo);
+}
+
+fru_internal_use_area_t *fru_encode_internal_use_area(const void *data, uint8_t *blocks)
+{
+	size_t i;
+	size_t len;
+	fru_internal_use_area_t *area = NULL;
+
+	if (!data) {
+		errno = EFAULT;
+		goto err;
+	}
+
+	len = strlen(data);
+
+	/* Must provide even number of nibbles for binary data */
+	if (!len || (len % 2)) {
+		errno = EINVAL;
+		goto err;
+	}
+
+	len /= 2;
+	*blocks = FRU_BLOCKS(len + sizeof(*area));
+	area = calloc(1, FRU_BYTES(*blocks));
+	if (!area)
+		goto err;
+
+	area->ver = FRU_VER_1;
+	for (i = 0; i < len; ++i) {
+		int16_t byte = hex2byte(data + 2 * i);
+		if (byte < 0) {
+			free(area);
+			errno = EINVAL;
+			goto err;
+		}
+		area->data[i] = byte;
+	}
+	goto out;
+err:
+	area = NULL;
+	*blocks = 0;
+out:
+	return area;
 }
 
 /**
@@ -1652,6 +1751,48 @@ size_t fru_mr_area_size(fru_mr_area_t *area, size_t limit, fru_flags_t flags)
 	return size;
 }
 
+fru_internal_use_area_t *find_fru_internal_use_area(
+	uint8_t *buffer, size_t *iu_size, size_t size,
+	fru_flags_t flags)
+{
+	off_t next_nearest_area = 0;
+	fru_t *header;
+
+	if (!iu_size) {
+		errno = EFAULT;
+		return NULL;
+	}
+	*iu_size = 0;
+
+	header = find_fru_header(buffer, size, flags);
+	if (!header || !header->internal) {
+		return NULL;
+	}
+
+	/* Now we need to find the area closest by offset to the
+	 * Internal Use one as the IU area doesn't contain its
+	 * size in the header so we need to calculate
+	 */
+	next_nearest_area = size; // Assume there is no next area, and the IU is the last one
+	for (fru_area_type_t idx = 0; idx < FRU_MAX_AREAS; ++idx) {
+		uint8_t *area_offset_ptr = (uint8_t *)header + offsetof(fru_t, internal) + idx;
+		if (*area_offset_ptr > header->internal
+		    && FRU_BYTES(*area_offset_ptr) < next_nearest_area)
+		{
+			next_nearest_area = FRU_BYTES(*area_offset_ptr);
+		}
+	}
+	fru_internal_use_area_t *area =
+	    (fru_internal_use_area_t *)(buffer + FRU_BYTES(header->internal));
+
+	if (area->ver != FRU_VER_1 && !(flags & FRU_IGNRVER)) {
+		return NULL;
+	}
+
+	*iu_size = next_nearest_area - FRU_BYTES(header->internal);
+	return area;
+}
+
 fru_mr_area_t *find_fru_mr_area(uint8_t *buffer, size_t *mr_size, size_t size,
                                 fru_flags_t flags)
 {
@@ -1745,6 +1886,41 @@ out:
 	}
 
 	return count;
+}
+
+bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
+                                  size_t area_len,
+                                  uint8_t **out,
+                                  fru_flags_t flags __attribute__((unused)))
+{
+	uint8_t *hexstring;
+	/* Internal Use Area size includes the version byte header that
+	 * we don't want to decode, so we subtract the header size. */
+	size_t data_len = area_len - sizeof(*area);
+	size_t out_len = data_len * 2 + 1;
+
+	if (!out) {
+		errno = EFAULT;
+		return false;
+	}
+
+	/* The output is two hex digits per byte,
+	 * plus an extra byte for the string terminator. */
+	hexstring = calloc(1, out_len);
+
+	if (!hexstring)
+		return false;
+
+	if(!fru_decode_raw_binary(area->data, data_len,
+	                          hexstring, out_len))
+	{
+		free(hexstring);
+		errno = ENOBUFS;
+		return false;
+	}
+
+	*out = hexstring;
+	return true;
 }
 
 #ifdef __STANDALONE__
