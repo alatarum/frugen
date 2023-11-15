@@ -37,6 +37,7 @@ typedef enum {
 	FRUGEN_FMT_UNSET,
 	FRUGEN_FMT_JSON,
 	FRUGEN_FMT_BINARY,
+	FRUGEN_FMT_TEXTOUT, /* Output format only */
 } format_t;
 
 #define fatal(fmt, args...) do {  \
@@ -98,7 +99,7 @@ int typelen2ind(uint8_t field) {
 }
 
 static
-void hexdump(const char *prefix, const void *data, size_t len)
+void fhexdump(FILE *fp, const char *prefix, const void *data, size_t len)
 {
 	size_t i;
 	const unsigned char *buf = data;
@@ -108,14 +109,14 @@ void hexdump(const char *prefix, const void *data, size_t len)
 	for (i = 0; i < len; ++i) {
 		if (0 == (i % perline)) {
 			memset(printable, 0, sizeof(printable));
-			printf("%s%04x: ", prefix, (unsigned int)i);
+			fprintf(fp, "%s%04x: ", prefix, (unsigned int)i);
 		}
 
-		printf("%02X ", buf[i]);
+		fprintf(fp, "%02X ", buf[i]);
 		printable[i % perline] = isprint(buf[i]) ? buf[i] : '.';
 
 		if (perline - 1  == (i % perline)) {
-			printf("| %s\n", printable);
+			fprintf(fp, "| %s\n", printable);
 		}
 	}
 
@@ -123,13 +124,13 @@ void hexdump(const char *prefix, const void *data, size_t len)
 		const size_t spaces_per_byte = 3; // Size of result of "%02X " above
 		const size_t remains_bytes = perline - (i % perline);
 		const size_t remains_spaces = remains_bytes * spaces_per_byte;
-		printf("%*c| %s\n", (int)remains_spaces, ' ', printable);
+		fprintf(fp, "%*c| %s\n", (int)remains_spaces, ' ', printable);
 	}
 }
 
 #define debug_dump(level, data, len, fmt, args...) do { \
 	debug(level, fmt, ##args); \
-	if (level <= debug_level) hexdump("DEBUG: ", data, len); \
+	if (level <= debug_level) fhexdump(stderr, "DEBUG: ", data, len); \
 } while(0)
 
 /**
@@ -677,6 +678,7 @@ STRING_ERR:
 int main(int argc, char *argv[])
 {
 	size_t i;
+	FILE *fp = NULL;
 	int fd;
 	int opt;
 	int lindex;
@@ -733,6 +735,9 @@ int main(int argc, char *argv[])
 		/* Set file to load the data from */
 		{ .name = "from",          .val = 'z', .has_arg = true },
 
+		/* Set the output data format */
+		{ .name = "out-format",    .val = 'o', .has_arg = true },
+
 		/* Chassis info area related options */
 		{ .name = "chassis-type",  .val = 't', .has_arg = true },
 		{ .name = "chassis-pn",    .val = 'a', .has_arg = true },
@@ -781,7 +786,19 @@ int main(int argc, char *argv[])
 			    "Out of ASCII range data will still result in binary encoding",
 		['j'] = "Set input file format to JSON. Specify before '--from'",
 		['r'] = "Set input file format to raw binary. Specify before '--from'",
-		['z'] = "Load FRU information from a file",
+		['z'] = "Load FRU information from a file, use '-' for stdout",
+		['o'] = "Output format, one of:\n"
+		        "\t\tbinary - Default format when writing to a file.\n"
+		        "\t\t         For stdout, the following will be used, even\n"
+		        "\t\t         if 'binary' is explicitly specified:\n"
+#ifdef __HAS_JSON__
+		        "\t\tjson   - Default when writing to stdout.\n"
+#endif
+		        "\t\ttext   - Plain text format, no decoding of MR area records"
+#ifndef __HAS_JSON__
+		        ".\n\t\t         Default format when writing to stdout"
+#endif
+		        ,
 		/* Chassis info area related options */
 		['t'] = "Set chassis type (hex). Defaults to 0x02 ('Unknown')",
 		['a'] = "Set chassis part number",
@@ -824,6 +841,7 @@ int main(int argc, char *argv[])
 	fru_mr_reclist_t *mr_reclist = NULL;
 
 	format_t format = FRUGEN_FMT_UNSET;
+	format_t outformat = FRUGEN_FMT_BINARY; /* Default binary output */
 
 	char optstring[ARRAY_SZ(options) * 2 + 1] = {0};
 
@@ -834,6 +852,7 @@ int main(int argc, char *argv[])
 			optstring[k++] = ':';
 	}
 
+	/* Process command line options */
 	do {
 		fru_reclist_t **custom = NULL;
 		bool is_mr_record = false; // The current option is an MR area record
@@ -1116,6 +1135,22 @@ int main(int argc, char *argv[])
 				}
 				break;
 
+			case 'o': // out-format
+				if (!strcmp(optarg, "json")) {
+#ifdef __HAS_JSON__
+					outformat = FRUGEN_FMT_JSON;
+#else
+					fatal("Can't output JSON, frugen was built without such support");
+#endif
+				}
+				else if (!strcmp(optarg, "text")) {
+					outformat = FRUGEN_FMT_TEXTOUT;
+				}
+				else {
+					debug(1, "Using default output format");
+				}
+				break;
+
 			case 't': // chassis-type
 				chassis.type = strtol(optarg, NULL, 16);
 				debug(2, "Chassis type will be set to 0x%02X from [%s]", chassis.type, optarg);
@@ -1255,14 +1290,38 @@ int main(int argc, char *argv[])
 		}
 	} while (opt != -1);
 
-	switch (format) {
-	case FRUGEN_FMT_BINARY: {
-		char timebuf[20] = {0};
-		struct tm* bdtime = gmtime(&board.tv.tv_sec);
-		strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
+	/* Generate the output */
+	if (optind >= argc)
+		fatal("Filename must be specified");
+
+	fname = argv[optind];
+
+	if (!strcmp("-", fname)) {
+		if (outformat == FRUGEN_FMT_BINARY)
 #ifdef __HAS_JSON__
+			outformat = FRUGEN_FMT_JSON;
+#else
+			outformat = FRUGEN_FMT_TEXTOUT;
+#endif
+
+		fp = stdout;
+		debug(1, "FRU info data will be output to stdout");
+	}
+	else
+		debug(1, "FRU info data will be stored in %s", fname);
+
+	switch (outformat) {
+	case FRUGEN_FMT_JSON: {
 		struct json_object *json_root = json_object_new_object();
 		struct json_object *section = NULL, *temp_obj = NULL;
+
+		if (!fp) {
+			fp = fopen(fname, "w");
+		}
+
+		if (!fp) {
+			fatal("Failed to open file '%s' for writing: %m", fname);
+		}
 
 		if (has_chassis) {
 			section = json_object_new_object();
@@ -1304,6 +1363,9 @@ int main(int argc, char *argv[])
 		}
 
 		if (has_board) {
+			char timebuf[20] = {0};
+			struct tm* bdtime = gmtime(&board.tv.tv_sec);
+			strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
 			section = json_object_new_object();
 			temp_obj = json_object_new_int(board.lang);
 			json_object_object_add(section, "lang", temp_obj);
@@ -1328,19 +1390,28 @@ int main(int argc, char *argv[])
 			json_from_mr_reclist(&jso, mr_reclist, flags);
 			json_object_object_add(json_root, "multirecord", jso);
 		}
-		// dump to stdout
-		json_object_to_fd(fileno(stdout), json_root,
+		json_object_to_fd(fileno(fp), json_root,
 		                  JSON_C_TO_STRING_PRETTY | JSON_C_TO_STRING_SPACED);
 		json_object_put(json_root);
-#else
+		}
+		break;
+	case FRUGEN_FMT_TEXTOUT: {
+		if (!fp) {
+			fp = fopen(fname, "w");
+		}
+
+		if (!fp) {
+			fatal("Failed to open file '%s' for writing: %m", fname);
+		}
+
 		if (has_chassis) {
-			puts("Chassis");
-			printf("\ttype: %u\n", chassis.type);
-			printf("\tpn(%s): %s\n", enc_names[chassis.pn.type], chassis.pn.val);
-			printf("\tserial(%s): %s\n", enc_names[chassis.serial.type], chassis.serial.val);
+			fputs("Chassis", fp);
+			fprintf(fp, "\ttype: %u\n", chassis.type);
+			fprintf(fp, "\tpn(%s): %s\n", enc_names[chassis.pn.type], chassis.pn.val);
+			fprintf(fp, "\tserial(%s): %s\n", enc_names[chassis.serial.type], chassis.serial.val);
 			fru_reclist_t *next = chassis.cust;
 			while (next != NULL) {
-				printf("\tcustom(%s): %s\n",
+				fprintf(fp, "\tcustom(%s): %s\n",
 				       enc_names[typelen2ind(next->rec->typelen)],
 				       next->rec->data);
 				next = next->next;
@@ -1348,18 +1419,18 @@ int main(int argc, char *argv[])
 		}
 
 		if (has_product) {
-			puts("Product");
-			printf("\tlang: %u\n", product.lang);
-			printf("\tmfg(%s): %s\n", enc_names[product.mfg.type], product.mfg.val);
-			printf("\tpname(%s): %s\n", enc_names[product.pname.type], product.pname.val);
-			printf("\tserial(%s): %s\n", enc_names[product.serial.type], product.serial.val);
-			printf("\tpn(%s): %s\n", enc_names[product.pn.type], product.pn.val);
-			printf("\tver(%s): %s\n", enc_names[product.ver.type], product.ver.val);
-			printf("\tatag(%s): %s\n", enc_names[product.atag.type], product.atag.val);
-			printf("\tfile(%s): %s\n", enc_names[product.file.type], product.file.val);
+			fputs("Product", fp);
+			fprintf(fp, "\tlang: %u\n", product.lang);
+			fprintf(fp, "\tmfg(%s): %s\n", enc_names[product.mfg.type], product.mfg.val);
+			fprintf(fp, "\tpname(%s): %s\n", enc_names[product.pname.type], product.pname.val);
+			fprintf(fp, "\tserial(%s): %s\n", enc_names[product.serial.type], product.serial.val);
+			fprintf(fp, "\tpn(%s): %s\n", enc_names[product.pn.type], product.pn.val);
+			fprintf(fp, "\tver(%s): %s\n", enc_names[product.ver.type], product.ver.val);
+			fprintf(fp, "\tatag(%s): %s\n", enc_names[product.atag.type], product.atag.val);
+			fprintf(fp, "\tfile(%s): %s\n", enc_names[product.file.type], product.file.val);
 			fru_reclist_t *next = product.cust;
 			while (next != NULL) {
-				printf("\tcustom(%s): %s\n",
+				fprintf(fp, "\tcustom(%s): %s\n",
 				       enc_names[typelen2ind(next->rec->typelen)],
 				       next->rec->data);
 				next = next->next;
@@ -1367,17 +1438,21 @@ int main(int argc, char *argv[])
 		}
 
 		if (has_board) {
-			puts("Board");
-			printf("\tlang: %u\n", board.lang);
-			printf("\tdate: %s\n", timebuf);
-			printf("\tmfg(%s): %s\n", enc_names[board.mfg.type], board.mfg.val);
-			printf("\tpname(%s): %s\n", enc_names[board.pname.type], board.pname.val);
-			printf("\tserial(%s): %s\n", enc_names[board.serial.type], board.serial.val);
-			printf("\tpn(%s): %s\n", enc_names[board.pn.type], board.pn.val);
-			printf("\tfile(%s): %s\n", enc_names[board.file.type], board.file.val);
+			char timebuf[20] = {0};
+			struct tm* bdtime = gmtime(&board.tv.tv_sec);
+			strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
+
+			fputs("Board", fp);
+			fprintf(fp, "\tlang: %u\n", board.lang);
+			fprintf(fp, "\tdate: %s\n", timebuf);
+			fprintf(fp, "\tmfg(%s): %s\n", enc_names[board.mfg.type], board.mfg.val);
+			fprintf(fp, "\tpname(%s): %s\n", enc_names[board.pname.type], board.pname.val);
+			fprintf(fp, "\tserial(%s): %s\n", enc_names[board.serial.type], board.serial.val);
+			fprintf(fp, "\tpn(%s): %s\n", enc_names[board.pn.type], board.pn.val);
+			fprintf(fp, "\tfile(%s): %s\n", enc_names[board.file.type], board.file.val);
 			fru_reclist_t *next = board.cust;
 			while (next != NULL) {
-				printf("\tcustom(%s): %s\n",
+				fprintf(fp, "\tcustom(%s): %s\n",
 				       enc_names[typelen2ind(next->rec->typelen)],
 				       next->rec->data);
 				next = next->next;
@@ -1387,27 +1462,21 @@ int main(int argc, char *argv[])
 		if (has_multirec) {
 			fru_mr_reclist_t *entry = mr_reclist;
 			size_t count = 0;
-			puts("Multirecord");
-			puts("\tNOTE: Data decoding is not available without JSON support");
+			fputs("Multirecord", fp);
+			fputs("\tNOTE: Data decoding is only available in JSON mode", fp);
 
 			while (entry) {
-				printf("\trecord %03zd:\n", count++);
-				hexdump("\t\t", entry->rec, FRU_MR_REC_SZ(entry->rec));
+				fprintf(fp, "\trecord %03zd:\n", count++);
+				fhexdump(fp, "\t\t", entry->rec, FRU_MR_REC_SZ(entry->rec));
 				if (IS_FRU_MR_END(entry->rec))
 					break;
 				entry = entry->next;
 			}
 		}
-#endif
 		break;
 		}
 	default:
-		if (optind >= argc)
-			fatal("Filename must be specified");
-
-		fname = argv[optind];
-		debug(1, "FRU info data will be stored in %s", fname);
-
+	case FRUGEN_FMT_BINARY:
 		if (has_internal) {
 			debug(1, "FRU file will have an internal use area");
 			/* Nothing to do here, added for uniformity, the actual
