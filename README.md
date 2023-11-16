@@ -31,11 +31,12 @@ So far supported in libfru:
   * Data decoding from all the formats defined by the specification.
     Exception: Unicode is not supported
 
-  * Internal use area creation, only with automatic sizing
-  * Chassis information area creation
-  * Board information area creation
-  * Product information area creation
-  * Multirecord area creation with the following record types:
+  * Internal use area creation from and decoding to a hex string,
+    only with automatic sizing
+  * Chassis information area creation and decoding
+  * Board information area creation and decoding
+  * Product information area creation and decoding
+  * Multirecord area creation and decoding with the following record types:
 
     * Management Access Record with the following subtypes:
 
@@ -47,28 +48,32 @@ So far supported in libfru:
       * Component management URL (curl)
       * Component ping address (cpingaddr)
 
+  * FRU area finding (in a memory buffer)
   * FRU file creation (in a memory buffer)
 
 _NOT supported:_
 
   * Miltirecord area record types/subtypes other than listed above
-  * Internal use area decoding
 
 ## frugen
 
 The frugen tool supports the following (limitations imposed by the libfru library):
 
-  * Internal use area (encoding only, from raw hex string)
+  * Internal use area (from/to a raw hex string)
   * Board area creation (including custom fields)
   * Product area creation (including custom fields)
   * Chassis area creation (including custom fields)
-  * Multirecord area creation (see libfru supported types above)
+  * Multirecord area creation and decoding (see libfru supported types above)
 
 The limitations:
 
-  * All data fields (except custom) are always treated as ASCII text, and the encoding
-    is automatically selected based on the byte range of the provided data. Custom fields
-    may be forced to be binary using --binary option.
+  * All data fields (except custom) provided as command line arguments are always
+    treated as ASCII text, and the encoding is automatically selected based on the
+    byte range of the provided data. Custom fields may be forced to be binary
+    using `--binary` option. Encoding may be specified explicitly for the data fields
+    in a JSON input template.
+  * Encodings will be reset to automatic when a binary FRU file is used as a template.
+    There is no way so far to enforce any specific encoding or to preserve the original one.
   * Internal use area creation/modification is available only from template file,
     not available from the command line arguments.
   * You should specify the UUID and the custom fields in either
@@ -121,7 +126,15 @@ Options:
 		Set input file format to raw binary. Specify before '--from'.
 
 	-z, --from <argument>
-		Load FRU information from a file.
+		Load FRU information from a file, use '-' for stdout.
+
+	-o, --out-format <argument>
+		Output format, one of:
+		binary - Default format when writing to a file.
+		         For stdout, the following will be used, even
+		         if 'binary' is explicitly specified:
+		json   - Default when writing to stdout.
+		text   - Plain text format, no decoding of MR area records.
 
 	-t, --chassis-type <argument>
 		Set chassis type (hex). Defaults to 0x02 ('Unknown').
