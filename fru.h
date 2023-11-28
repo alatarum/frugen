@@ -403,6 +403,14 @@ typedef struct {
 	fru_reclist_t *cust;
 } fru_exploded_product_t;
 
+typedef struct {
+	uint8_t *internal_use;
+	fru_exploded_chassis_t chassis;
+	fru_exploded_board_t board;
+	fru_exploded_product_t product;
+	fru_mr_reclist_t *mr_reclist;
+} fru_exploded_t;
+
 #define fru_loadfield(eafield, value) strncpy((char *)eafield, value, FRU_FIELDMAXLEN)
 
 void fru_set_autodetect(bool enable);

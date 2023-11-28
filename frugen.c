@@ -14,6 +14,7 @@
 #define _GNU_SOURCE
 #include <getopt.h>
 
+#include <assert.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -23,40 +24,17 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
-#include <errno.h>
 #include <limits.h>
 #include <ctype.h>
 #include "fru.h"
+#include "frugen.h"
 #include "smbios.h"
 
 #ifdef __HAS_JSON__
-#include <json-c/json.h>
+#include "frugen-json.h"
 #endif
 
-typedef enum {
-	FRUGEN_FMT_UNSET,
-	FRUGEN_FMT_JSON,
-	FRUGEN_FMT_BINARY,
-	FRUGEN_FMT_TEXTOUT, /* Output format only */
-} format_t;
-
-#define fatal(fmt, args...) do {  \
-	fprintf(stderr, fmt, ##args); \
-	fprintf(stderr, "\n");        \
-	exit(1);                      \
-} while(0)
-
 volatile int debug_level = 0;
-#define debug(level, fmt, args...) do { \
-	int e = errno;                      \
-	if(level <= debug_level) {          \
-		printf("DEBUG: ");              \
-		errno = e;                      \
-		printf(fmt, ##args);            \
-		printf("\n");                   \
-		errno = e;                      \
-	}                                   \
-} while(0)
 
 static const char* fru_mr_mgmt_name[FRU_MR_MGMT_MAX] = {
 	[MGMT_TYPENAME_ID(SYS_URL)] = "surl",
@@ -88,14 +66,6 @@ const char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
 		fatal("FRU MR Management Record type %d is out of range", type);
 	}
 	return fru_mr_mgmt_name[MGMT_TYPE_ID(type)];
-}
-
-static
-int typelen2ind(uint8_t field) {
-	if (FIELD_TYPE_T(field) < TOTAL_FIELD_TYPES)
-		return FIELD_TYPE_T(field);
-	else
-		return FIELD_TYPE_AUTO;
 }
 
 static
@@ -164,7 +134,6 @@ int16_t hex2byte(const char *hex) {
 	return ((hi << 4) | lo);
 }
 
-static
 bool datestr_to_tv(const char *datestr, struct timeval *tv)
 {
 	struct tm tm = {0};
@@ -227,7 +196,6 @@ uint8_t * fru_encode_binary_string(size_t *len, const char *hexstr)
 	return buf;
 }
 
-static
 fru_field_t * fru_encode_custom_binary_field(const char *hexstr)
 {
 	size_t len;
@@ -239,441 +207,138 @@ fru_field_t * fru_encode_custom_binary_field(const char *hexstr)
 	return rec;
 }
 
+static struct frugen_config_s config = {
+	.format = FRUGEN_FMT_UNSET,
+	.outformat = FRUGEN_FMT_BINARY, /* Default binary output */
+	.flags = FRU_NOFLAGS,
+};
+
+void load_fromfile(const char *fname,
+                   const struct frugen_config_s *config,
+                   struct frugen_fruinfo_s *info)
+{
+	assert(fname);
+
+	switch(config->format) {
 #ifdef __HAS_JSON__
-
-#if (JSON_C_MAJOR_VERSION == 0 && JSON_C_MINOR_VERSION < 13)
-int
-json_object_to_fd(int fd, struct json_object *obj, int flags)
-{
-	// implementation is copied from json-c v0.13
-	int ret;
-	const char *json_str;
-	unsigned int wpos, wsize;
-
-	if (!(json_str = json_object_to_json_string_ext(obj, flags))) {
-		return -1;
-	}
-
-	wsize = (unsigned int)(strlen(json_str) & UINT_MAX); /* CAW: probably unnecessary, but the most 64bit safe */
-	wpos = 0;
-	while(wpos < wsize) {
-		if((ret = write(fd, json_str + wpos, wsize-wpos)) < 0) {
-			return -1;
+	case FRUGEN_FMT_JSON:
+		load_from_json_file(fname, info);
+		break;
+#endif /* __HAS_JSON__ */
+	case FRUGEN_FMT_BINARY: {
+		size_t mr_size;
+		int fd = open(fname, O_RDONLY);
+		debug(2, "Data format is BINARY");
+		if (fd < 0) {
+			fatal("Failed to open file: %m");
 		}
 
-		/* because of the above check for ret < 0, we can safely cast and add */
-		wpos += (unsigned int)ret;
-	}
-
-	return 0;
-}
-#endif
-
-static
-bool json_fill_fru_area_fields(json_object *jso, int count,
-                               const char *fieldnames[],
-                               typed_field_t *fields[])
-{
-	int i;
-	json_object *jsfield;
-	bool data_in_this_area = false;
-	for (i = 0; i < count; i++) {
-		if (json_object_object_get_ex(jso, fieldnames[i], &jsfield)) {
-			// field is an object
-			json_object *typefield, *valfield;
-			if (json_object_object_get_ex(jsfield, "type", &typefield) &&
-			    json_object_object_get_ex(jsfield, "data", &valfield)) {
-				// expected subfields are type and val
-				const char *type = json_object_get_string(typefield);
-				const char *val = json_object_get_string(valfield);
-				if (!strcmp("binary", type)) {
-					fatal("Binary format not yet implemented");
-				} else if (!strcmp("bcdplus", type)) {
-					fields[i]->type = FIELD_TYPE_BCDPLUS;
-				} else if (!strcmp("6bitascii", type)) {
-					fields[i]->type = FIELD_TYPE_SIXBITASCII;
-				} else if (!strcmp("text", type)) {
-					fields[i]->type = FIELD_TYPE_TEXT;
-				} else {
-					debug(1, "Unknown type %s for field '%s'",
-					      type, fieldnames[i]);
-					continue;
-				}
-				fru_loadfield((char *)fields[i]->val, val);
-				debug(2, "Field %s '%s' (%s) loaded from JSON",
-				      fieldnames[i], val, type);
-				data_in_this_area = true;
-			} else {
-				const char *s = json_object_get_string(jsfield);
-				debug(2, "Field %s '%s' loaded from JSON",
-				      fieldnames[i], s);
-				fru_loadfield(fields[i]->val, s);
-				fields[i]->type = FIELD_TYPE_AUTO;
-				data_in_this_area = true;
-			}
+		struct stat statbuf = {0};
+		if (fstat(fd, &statbuf)) {
+			fatal("Failed to get file properties: %m");
 		}
-	}
-
-	return data_in_this_area;
-}
-
-static
-bool json_fill_fru_area_custom(json_object *jso, fru_reclist_t **custom)
-{
-	int i, alen;
-	json_object *jsfield;
-	bool data_in_this_area = false;
-	fru_reclist_t *custptr;
-
-	if (!custom)
-		return false;
-
-	json_object_object_get_ex(jso, "custom", &jsfield);
-	if (!jsfield)
-		return false;
-
-	if (json_object_get_type(jsfield) != json_type_array)
-		return false;
-
-	alen = json_object_array_length(jsfield);
-	if (!alen)
-		return false;
-
-	for (i = 0; i < alen; i++) {
-		const char *type = NULL;
-		const void *data = NULL;
-		json_object *item, *ifield;
-
-		item = json_object_array_get_idx(jsfield, i);
-		if (!item) continue;
-
-		json_object_object_get_ex(item, "type", &ifield);
-		if (!ifield || !(type = json_object_get_string(ifield))) {
-			debug(3, "Using automatic text encoding for custom field %d", i);
-			type = "auto";
+		if (statbuf.st_size > MAX_FILE_SIZE) {
+			fatal("File too large");
 		}
 
-		json_object_object_get_ex(item, "data", &ifield);
-		if (!ifield || !(data = json_object_get_string(ifield))) {
-			debug(3, "Emtpy data or no data at all found for custom field %d", i);
-			continue;
+		uint8_t *buffer = calloc(1, statbuf.st_size);
+		if (buffer == NULL) {
+			fatal("Cannot allocate buffer");
 		}
 
-		debug(4, "Custom pointer before addition was %p", *custom);
-		custptr = add_reclist(custom);
-		debug(4, "Custom pointer after addition is %p", *custom);
-
-		if (!custptr)
-			return false;
-
-		if (!strcmp("binary", type)) {
-			custptr->rec = fru_encode_custom_binary_field(data);
-		} else if (!strcmp("bcdplus", type)) {
-			custptr->rec = fru_encode_data(LEN_BCDPLUS, data);
-		} else if (!strcmp("6bitascii", type)) {
-			custptr->rec = fru_encode_data(LEN_6BITASCII, data);
-		} else if (!strcmp("text", type)) {
-			custptr->rec = fru_encode_data(LEN_TEXT, data);
-		} else {
-			custptr->rec = fru_encode_data(LEN_AUTO, data);
+		debug(2, "Reading the template file of size %lu...", statbuf.st_size);
+		if (read(fd, buffer, statbuf.st_size) != statbuf.st_size) {
+			fatal("Cannot read file");
 		}
+		close(fd);
 
-		if (!custptr->rec) {
-			fatal("Failed to encode custom field. Memory allocation or field length problem.");
-		}
-		debug(2, "Custom field %i has been loaded from JSON at %p->rec = %p", i, *custom, (*custom)->rec);
-		data_in_this_area = true;
-	}
+		errno = 0;
+		size_t iu_size;
+		fru_internal_use_area_t *internal_area =
+			find_fru_internal_use_area(buffer, &iu_size, statbuf.st_size,
+			                           config->flags);
+		if (internal_area) {
+			debug(2, "Found an internal use area of size %zd", iu_size);
 
-	debug(4, "Traversing all custom fields...");
-	custptr = *custom;
-	while(custptr) {
-		debug(4, "Custom %p, next %p", custptr, custptr->next);
-		custptr = custptr->next;
-	}
-
-	return data_in_this_area;
-}
-
-static
-bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
-{
-	int i, alen;
-	fru_mr_reclist_t *mr_reclist_tail;
-	bool has_multirec = false;
-
-	if (!mr_reclist)
-		goto out;
-
-	if (json_object_get_type(jso) != json_type_array)
-		goto out;
-
-	alen = json_object_array_length(jso);
-	if (!alen)
-		goto out;
-
-	debug(4, "Multirecord area record list is initially at %p", *mr_reclist);
-
-	for (i = 0; i < alen; i++) {
-		const char *type = NULL;
-		json_object *item, *ifield;
-
-		item = json_object_array_get_idx(jso, i);
-		if (!item) continue;
-
-		debug(3, "Parsing record #%d/%d", i + 1, alen);
-
-		json_object_object_get_ex(item, "type", &ifield);
-		if (!ifield || !(type = json_object_get_string(ifield))) {
-			fatal("Each multirecord area record must have a type specifier");
-		}
-
-		debug(3, "Record is of type '%s'", type);
-
-		mr_reclist_tail = add_mr_reclist(mr_reclist);
-		if (!mr_reclist_tail)
-			fatal("JSON: Failed to allocate multirecord area list");
-
-		debug(4, "Multirecord area record list is now at %p", *mr_reclist);
-		debug(4, "Multirecord area record list tail is at %p", mr_reclist_tail);
-
-		if (!strcmp(type, "management")) {
-			const char *subtype = NULL;
-			fru_mr_mgmt_type_t subtype_id;
-			json_object_object_get_ex(item, "subtype", &ifield);
-			if (!ifield || !(subtype = json_object_get_string(ifield))) {
-				fatal("Each management record must have a subtype");
+			if (!fru_decode_internal_use_area(internal_area, iu_size,
+			                                  &info->fru.internal_use,
+			                                  config->flags))
+			{
+				fatal("Failed to decode interal use area");
 			}
 
-			debug(3, "Management record subtype is '%s'", subtype);
-			subtype_id = fru_mr_mgmt_type_by_name(subtype);
-			if (!subtype_id) {
-				fatal("Management record subtype '%s' is invalid", subtype);
-			}
-
-			debug(3, "Management record subtype ID is '%d'", subtype_id);
-
-			if (!strcmp(subtype, "uuid")) {
-				const unsigned char *uuid = NULL;
-				json_object_object_get_ex(item, "uuid", &ifield);
-				if (ifield) {
-					uuid = (const unsigned char *)json_object_get_string(ifield);
-				}
-
-				if (!ifield || !uuid) {
-					fatal("A uuid management record must have a uuid field");
-				}
-
-				debug(3, "Parsing UUID %s", uuid);
-				errno = fru_mr_uuid2rec(&mr_reclist_tail->rec, uuid);
-				if (errno)
-					fatal("Failed to convert UUID: %m");
-				debug(2, "System UUID loaded from JSON: %s", uuid);
-				has_multirec = true;
-			}
-			else {
-				int err;
-				const unsigned char *val = NULL;
-				json_object_object_get_ex(item, subtype, &ifield);
-				if (ifield) {
-					val = (const unsigned char *)json_object_get_string(ifield);
-				}
-
-				if (!ifield || !val) {
-					fatal("Management record '%s' must have a '%s' field",
-					      subtype, subtype);
-				}
-
-				err = fru_mr_mgmt_str2rec(&mr_reclist_tail->rec,
-				                          val, subtype_id);
-				if (err) {
-					fatal("Failed to convert '%s' to a record: %s",
-						  subtype, strerror(err < 0 ? -err : err));
-				}
-				debug(2, "Loaded '%s' from JSON: %s", subtype, val);
-				has_multirec = true;
-			}
-		}
-		else if (!strcmp(type, "psu")) {
-			debug(1, "Found a PSU info record (not yet supported, skipped)");
-			continue;
+			debug(2, "Internal use area: %s", info->fru.internal_use);
+			info->has_internal = true;
 		}
 		else {
-			fatal("Multirecord type '%s' is not supported", type);
-			continue;
+			debug(2, "No internal use area found: %m");
 		}
-	}
 
-out:
-	return has_multirec;
+		errno = 0;
+		fru_chassis_area_t *chassis_area =
+			find_fru_chassis_area(buffer, statbuf.st_size, config->flags);
+		if (chassis_area) {
+			debug(2, "Found a chassis area");
+			if (!fru_decode_chassis_info(chassis_area, &info->fru.chassis))
+				fatal("Failed to decode chassis");
+			info->has_chassis = true;
+		}
+		else {
+			debug(2, "No chassis area found: %m");
+		}
+
+		errno = 0;
+		fru_board_area_t *board_area =
+			find_fru_board_area(buffer, statbuf.st_size, config->flags);
+		if (board_area) {
+			debug(2, "Found a board area");
+			if (!fru_decode_board_info(board_area, &info->fru.board))
+				fatal("Failed to decode board");
+			info->has_board = true;
+		}
+		else {
+			debug(2, "No board area found");
+		}
+
+		errno = 0;
+		fru_product_area_t *product_area =
+			find_fru_product_area(buffer, statbuf.st_size, config->flags);
+		if (product_area) {
+			debug(2, "Found a product area");
+			if (!fru_decode_product_info(product_area, &info->fru.product))
+				fatal("Failed to decode product");
+			info->has_product = true;
+		}
+		else {
+			debug(2, "No product area found");
+		}
+
+		errno = 0;
+		mr_size = 0;
+		fru_mr_area_t *mr_area =
+			find_fru_mr_area(buffer, &mr_size, statbuf.st_size, config->flags);
+		if (mr_area) {
+			int rec_cnt;
+			debug(2, "Found a multirecord area of size %zd", mr_size);
+			rec_cnt = fru_decode_mr_area(mr_area, &info->fru.mr_reclist,
+			                             mr_size, config->flags);
+			if (0 > rec_cnt)
+				fatal("Failed to decode multirecord area");
+			debug(2, "Loaded %d records from the multirecord area", rec_cnt);
+			info->has_multirec = true;
+		}
+		else {
+			debug(2, "No multirecord area found: %m");
+		}
+
+		free(buffer);
+		break;
+		}
+	default:
+		fatal("Please specify the input file format");
+		break;
+	}
 }
-
-/**
- * Allocate a multirecord area json object \a jso and build it from
- * the supplied multirecord area record list \a mr_reclist
- */
-static
-bool json_from_mr_reclist(json_object **jso,
-                          const fru_mr_reclist_t *mr_reclist,
-                          fru_flags_t flags)
-{
-	bool rc = false;
-	json_object *mr_jso = NULL;
-	const fru_mr_reclist_t *item = mr_reclist;
-
-	if (!mr_reclist)
-		goto out;
-
-	if (!jso)
-		goto out;
-
-	mr_jso = json_object_new_array();
-	if (!mr_jso) {
-		printf("Failed to allocate a new JSON array for multirecord area\n");
-		goto out;
-	}
-
-	if (json_object_get_type(mr_jso) != json_type_array)
-		goto out;
-
-	while (item) {
-		fru_mr_rec_t *rec = item->rec;
-		// Pointers to static strings, depending on the found record
-		const char *type = NULL;
-		const char *subtype = NULL;
-		const char *key = NULL;
-		// Pointer to an allocated string to be freed at the end of iteration
-		char *val = NULL;
-
-		switch (rec->hdr.type_id) {
-			case FRU_MR_MGMT_ACCESS: {
-				fru_mr_mgmt_rec_t *mgmt = (fru_mr_mgmt_rec_t *)rec;
-				int rc;
-				type = "management";
-#define MGMT_TYPE_ID(type) ((type) - FRU_MR_MGMT_MIN)
-				switch (mgmt->subtype) {
-				case FRU_MR_MGMT_SYS_UUID:
-					if ((rc = fru_mr_rec2uuid(&val, mgmt, flags))) {
-						printf("Could not decode the UUID record: %s\n",
-						       strerror(-rc));
-						break;
-					}
-					key = subtype = fru_mr_mgmt_name[MGMT_TYPE_ID(mgmt->subtype)];
-					break;
-				case FRU_MR_MGMT_SYS_URL:
-				case FRU_MR_MGMT_SYS_NAME:
-				case FRU_MR_MGMT_SYS_PING:
-				case FRU_MR_MGMT_COMPONENT_URL:
-				case FRU_MR_MGMT_COMPONENT_NAME:
-				case FRU_MR_MGMT_COMPONENT_PING:
-					if ((rc = fru_mr_mgmt_rec2str(&val, mgmt, flags))) {
-						printf("Could not decode the Mgmt Access record '%s': %s\n",
-						       fru_mr_mgmt_name[MGMT_TYPE_ID(mgmt->subtype)],
-						       strerror(-rc));
-						break;
-					}
-					type = "management";
-					key = subtype = fru_mr_mgmt_name[MGMT_TYPE_ID(mgmt->subtype)];
-					break;
-				default:
-					debug(1, "Multirecord Management subtype 0x%02X is not yet supported",
-					      mgmt->subtype);
-				}
-				break;
-			}
-			case FRU_MR_PSU_INFO:
-				debug(1, "Found a PSU info record (not yet supported, skipped)");
-				break;
-			default:
-				debug(1, "Multirecord type 0x%02X is not yet supported", rec->hdr.type_id);
-		}
-
-		if (type && subtype && key && val) {
-			struct json_object *val_string, *type_string, *subtype_string, *entry;
-			val_string = json_object_new_string((const char *)val);
-			if (val) { // We don't need it anymore, it's in val_string already
-				free(val);
-				val = NULL;
-			}
-			if (NULL == val_string) {
-				printf("Failed to allocate a JSON string for MR record value");
-				goto out;
-			}
-			if ((type_string = json_object_new_string((const char *)type)) == NULL) {
-				printf("Failed to allocate a JSON string for MR record type");
-				json_object_put(val_string);
-				goto out;
-			}
-			if ((subtype_string = json_object_new_string((const char *)subtype)) == NULL) {
-				printf("Failed to allocate a JSON string for MR record subtype");
-				json_object_put(type_string);
-				json_object_put(val_string);
-				goto out;
-			}
-			if ((entry = json_object_new_object()) == NULL) {
-				printf("Failed to allocate a new JSON entry for MR record");
-				json_object_put(subtype_string);
-				json_object_put(type_string);
-				json_object_put(val_string);
-				goto out;
-			}
-			json_object_object_add(entry, "type", type_string);
-			json_object_object_add(entry, "subtype", subtype_string);
-			json_object_object_add(entry, key, val_string);
-			json_object_array_add(mr_jso, entry);
-		}
-
-		item = item->next;
-		if (val) {
-			free(val);
-		}
-	}
-
-	rc = true;
-out:
-	if (!rc && mr_jso) {
-		json_object_put(mr_jso);
-		mr_jso = NULL;
-	}
-	*jso = mr_jso;
-	return rc;
-}
-
-static
-int json_object_add_with_type(struct json_object* obj,
-                              const char* key,
-                              const unsigned char* val,
-                              int type) {
-	struct json_object *string, *type_string, *entry;
-	if ((string = json_object_new_string((const char *)val)) == NULL)
-		goto STRING_ERR;
-
-	if (type == FIELD_TYPE_AUTO) {
-		entry = string;
-	} else {
-		if ((type_string = json_object_new_string(enc_names[type])) == NULL)
-			goto TYPE_STRING_ERR;
-		if ((entry = json_object_new_object()) == NULL)
-			goto ENTRY_ERR;
-		json_object_object_add(entry, "type", type_string);
-		json_object_object_add(entry, "data", string);
-	}
-	if (key == NULL) {
-		return json_object_array_add(obj, entry);
-	} else {
-		json_object_object_add(obj, key, entry);
-		return 0;
-	}
-
-ENTRY_ERR:
-	json_object_put(type_string);
-TYPE_STRING_ERR:
-	json_object_put(string);
-STRING_ERR:
-	return -1;
-}
-
-#endif /* __HAS_JSON__ */
 
 int main(int argc, char *argv[])
 {
@@ -685,7 +350,21 @@ int main(int argc, char *argv[])
 
 	fru_t *fru;
 	size_t size;
-	size_t mr_size;
+	struct frugen_fruinfo_s fruinfo = {
+		.fru = {
+			.internal_use = NULL,
+			.chassis      = { .type = SMBIOS_CHASSIS_UNKNOWN },
+			.board        = { .lang = LANG_ENGLISH },
+			.product      = { .lang = LANG_ENGLISH },
+			.mr_reclist   = NULL,
+		},
+		.has_chassis  = false,
+		.has_board    = false,
+		.has_bdate    = false,
+		.has_product  = false,
+		.has_internal = false,
+		.has_multirec = false,
+	};
 
 	bool cust_binary = false; // Flag: treat the following custom attribute as binary
 	bool no_curr_date = false; // Flag: don't use current timestamp if no 'date' is specified
@@ -700,14 +379,9 @@ int main(int argc, char *argv[])
 		{ .atype = FRU_MULTIRECORD }
 	};
 
-	uint8_t *internal_use = NULL;
-	fru_exploded_chassis_t chassis = { .type = SMBIOS_CHASSIS_UNKNOWN };
-	fru_exploded_board_t board = { .lang = LANG_ENGLISH };
-	fru_exploded_product_t product = { .lang = LANG_ENGLISH };
-
 	tzset();
-	gettimeofday(&board.tv, NULL);
-	board.tv.tv_sec += timezone;
+	gettimeofday(&fruinfo.fru.board.tv, NULL);
+	fruinfo.fru.board.tv.tv_sec += timezone;
 
 	struct option options[] = {
 		/* Display usage help */
@@ -727,8 +401,10 @@ int main(int argc, char *argv[])
 		 */
 		{ .name = "ascii",         .val = 'I', .has_arg = false },
 
+#ifdef __HAS_JSON__
 		/* Set input file format to JSON */
 		{ .name = "json",          .val = 'j', .has_arg = false },
+#endif
 
 		/* Set input file format to raw binary */
 		{ .name = "raw",          .val = 'r', .has_arg = false },
@@ -832,18 +508,6 @@ int main(int argc, char *argv[])
 		        "NOTE: This does NOT replace the data specified in the template",
 	};
 
-	fru_flags_t flags = FRU_NOFLAGS;
-	bool has_chassis  = false,
-	     has_board    = false,
-	     has_bdate    = false,
-	     has_product  = false,
-	     has_internal = false,
-	     has_multirec = false;
-	fru_mr_reclist_t *mr_reclist = NULL;
-
-	format_t format = FRUGEN_FMT_UNSET;
-	format_t outformat = FRUGEN_FMT_BINARY; /* Default binary output */
-
 	char optstring[ARRAY_SZ(options) * 2 + 1] = {0};
 
 	for (i = 0; i < ARRAY_SZ(options); ++i) {
@@ -890,7 +554,7 @@ int main(int argc, char *argv[])
 				for (size_t i = 0; i < ARRAY_SZ(all_flags); i++) {
 					if (strcmp(all_flags[i].name, optarg))
 						continue;
-					flags |= all_flags[i].value;
+					config.flags |= all_flags[i].value;
 					debug(2, "Debug flag accepted: %s", optarg);
 					break;
 				}
@@ -926,234 +590,33 @@ int main(int argc, char *argv[])
 				exit(0);
 				break;
 
-			case 'j': // json
 #ifdef __HAS_JSON__
-				format = FRUGEN_FMT_JSON;
+			case 'j': // json
+				config.format = FRUGEN_FMT_JSON;
 				debug(1, "Using JSON input format");
-#else
-				fatal("JSON support was not compiled in");
-#endif
 				break;
+#endif
 
 			case 'r': // binary
-				format = FRUGEN_FMT_BINARY;
+				config.format = FRUGEN_FMT_BINARY;
 				debug(1, "Using RAW binary input format");
 				break;
 
 			case 'z': // from
 				debug(2, "Will load FRU information from file %s", optarg);
+				load_fromfile(optarg, &config, &fruinfo);
 
-				switch(format) {
-#ifdef __HAS_JSON__
-				case FRUGEN_FMT_JSON: {
-					json_object *jstree, *jso, *jsfield;
-					json_object_iter iter;
-
-					debug(2, "Data format is JSON");
-					/* Allocate a new object and load contents from file */
-					jstree = json_object_from_file(optarg);
-					if (NULL == jstree)
-						fatal("Failed to load JSON FRU object from %s", optarg);
-
-					json_object_object_foreachC(jstree, iter) {
-						jso = iter.val;
-						if (!strcmp(iter.key, "internal")) {
-							size_t len;
-							const char *data = json_object_get_string(jso);
-							if (!data) {
-								debug(2, "Internal use are w/o data, skipping");
-								continue;
-							}
-							len = strlen(data) + 1;
-							internal_use = calloc(1, len);
-							if (!internal_use)
-								fatal("Failed to allocate a buffer for internal use area");
-
-							memmove(internal_use, data, len); /* `data` will be destroyed, can't use it */
-							has_internal = true;
-							debug(2, "Internal use area data loaded from JSON");
-							continue;
-						} else if (!strcmp(iter.key, "chassis")) {
-							const char *fieldname[] = { "pn", "serial" };
-							typed_field_t* field[] = { &chassis.pn, &chassis.serial };
-							json_object_object_get_ex(jso, "type", &jsfield);
-							if (jsfield) {
-								chassis.type = json_object_get_int(jsfield);
-								debug(2, "Chassis type 0x%02X loaded from JSON", chassis.type);
-								has_chassis = true;
-							}
-							/* Now get values for the string fields */
-							has_chassis |= json_fill_fru_area_fields(jso, ARRAY_SZ(field), fieldname, field);
-							has_chassis |= json_fill_fru_area_custom(jso, &chassis.cust);
-						} else if (!strcmp(iter.key, "board")) {
-							const char *fieldname[] = { "mfg", "pname", "pn", "serial", "file" };
-							typed_field_t *field[] = { &board.mfg, &board.pname, &board.pn, &board.serial, &board.file };
-							/* Get values for non-string fields */
-#if 0 /* TODO: Language support is not implemented yet */
-							json_object_object_get_ex(jso, "lang", &jsfield);
-							if (jsfield) {
-								board.lang = json_object_get_int(jsfield);
-								debug(2, "Board language 0x%02X loaded from JSON", board.lang);
-								has_board = true;
-							}
-#endif
-							json_object_object_get_ex(jso, "date", &jsfield);
-							if (jsfield) {
-								const char *date = json_object_get_string(jsfield);
-								debug(2, "Board date '%s' will be loaded from JSON", date);
-								if (!datestr_to_tv(date, &board.tv))
-									fatal("Invalid board date/time format in JSON file");
-								has_board = true;
-								has_bdate = true;
-							}
-							/* Now get values for the string fields */
-							has_board |= json_fill_fru_area_fields(jso, ARRAY_SZ(field), fieldname, field);
-							has_board |= json_fill_fru_area_custom(jso, &board.cust);
-						} else if (!strcmp(iter.key, "product")) {
-							const char *fieldname[] = { "mfg", "pname", "pn", "ver", "serial", "atag", "file" };
-							typed_field_t *field[] = { &product.mfg, &product.pname, &product.pn, &product.ver,
-							                           &product.serial, &product.atag, &product.file };
-#if 0 /* TODO: Language support is not implemented yet */
-							/* Get values for non-string fields */
-							json_object_object_get_ex(jso, "lang", &jsfield);
-							if (jsfield) {
-								product.lang = json_object_get_int(jsfield);
-								debug(2, "Product language 0x%02X loaded from JSON", product.lang);
-								has_product = true;
-							}
-#endif
-							/* Now get values for the string fields */
-							has_product |= json_fill_fru_area_fields(jso, ARRAY_SZ(field), fieldname, field);
-							has_product |= json_fill_fru_area_custom(jso, &product.cust);
-						} else if (!strcmp(iter.key, "multirecord")) {
-							debug(2, "Processing multirecord area records");
-							has_multirec |= json_fill_fru_mr_reclist(jso, &mr_reclist);
-						}
-					}
-
-					/* Deallocate the JSON object */
-					json_object_put(jstree);
-					break;
-					}
-#endif /* __HAS_JSON__ */
-				case FRUGEN_FMT_BINARY: {
-					int fd = open(optarg, O_RDONLY);
-					debug(2, "Data format is BINARY");
-					if (fd < 0) {
-						fatal("Failed to open file: %m");
-					}
-
-					struct stat statbuf = {0};
-					if (fstat(fd, &statbuf)) {
-						fatal("Failed to get file properties: %m");
-					}
-					if (statbuf.st_size > MAX_FILE_SIZE) {
-						fatal("File too large");
-					}
-
-					uint8_t *buffer = calloc(1, statbuf.st_size);
-					if (buffer == NULL) {
-						fatal("Cannot allocate buffer");
-					}
-
-					debug(2, "Reading the template file of size %lu...", statbuf.st_size);
-					if (read(fd, buffer, statbuf.st_size) != statbuf.st_size) {
-						fatal("Cannot read file");
-					}
-					close(fd);
-
-					errno = 0;
-					size_t iu_size;
-					fru_internal_use_area_t *internal_area =
-						find_fru_internal_use_area(buffer, &iu_size,  statbuf.st_size, flags);
-					if (internal_area) {
-						debug(2, "Found an internal use area of size %zd", iu_size);
-
-						if (!fru_decode_internal_use_area(internal_area, iu_size, &internal_use, flags))
-							fatal("Failed to decode interal use area");
-
-						debug(2, "Internal use area: %s", internal_use);
-						has_internal = true;
-					}
-					else {
-						debug(2, "No internal use area found: %m");
-					}
-
-					errno = 0;
-					fru_chassis_area_t *chassis_area =
-						find_fru_chassis_area(buffer, statbuf.st_size, flags);
-					if (chassis_area) {
-						debug(2, "Found a chassis area");
-						if (!fru_decode_chassis_info(chassis_area, &chassis))
-							fatal("Failed to decode chassis");
-						has_chassis = true;
-					}
-					else {
-						debug(2, "No chassis area found: %m");
-					}
-
-					errno = 0;
-					fru_board_area_t *board_area =
-						find_fru_board_area(buffer, statbuf.st_size, flags);
-					if (board_area) {
-						debug(2, "Found a board area");
-						if (!fru_decode_board_info(board_area, &board))
-							fatal("Failed to decode board");
-						has_board = true;
-					}
-					else {
-						debug(2, "No board area found");
-					}
-
-					errno = 0;
-					fru_product_area_t *product_area =
-						find_fru_product_area(buffer, statbuf.st_size, flags);
-					if (product_area) {
-						debug(2, "Found a product area");
-						if (!fru_decode_product_info(product_area, &product))
-							fatal("Failed to decode product");
-						has_product = true;
-					}
-					else {
-						debug(2, "No product area found");
-					}
-
-					errno = 0;
-					mr_size = 0;
-					fru_mr_area_t *mr_area =
-						find_fru_mr_area(buffer, &mr_size, statbuf.st_size, flags);
-					if (mr_area) {
-						int rec_cnt;
-						debug(2, "Found a multirecord area of size %zd", mr_size);
-						rec_cnt = fru_decode_mr_area(mr_area, &mr_reclist, mr_size, flags);
-						if (0 > rec_cnt)
-							fatal("Failed to decode multirecord area");
-						debug(2, "Loaded %d records from the multirecord area", rec_cnt);
-						has_multirec = true;
-					}
-					else {
-						debug(2, "No multirecord area found: %m");
-					}
-
-					free(buffer);
-					break;
-					}
-				default:
-					fatal("Please specify the input file format");
-					break;
-				}
 				break;
 
 			case 'o': // out-format
-				if (!strcmp(optarg, "json")) {
 #ifdef __HAS_JSON__
-					outformat = FRUGEN_FMT_JSON;
-#else
-					fatal("Can't output JSON, frugen was built without such support");
-#endif
+				if (!strcmp(optarg, "json")) {
+					config.outformat = FRUGEN_FMT_JSON;
 				}
-				else if (!strcmp(optarg, "text")) {
-					outformat = FRUGEN_FMT_TEXTOUT;
+				else
+#endif
+				if (!strcmp(optarg, "text")) {
+					config.outformat = FRUGEN_FMT_TEXTOUT;
 				}
 				else {
 					debug(1, "Using default output format");
@@ -1161,89 +624,89 @@ int main(int argc, char *argv[])
 				break;
 
 			case 't': // chassis-type
-				chassis.type = strtol(optarg, NULL, 16);
-				debug(2, "Chassis type will be set to 0x%02X from [%s]", chassis.type, optarg);
-				has_chassis = true;
+				fruinfo.fru.chassis.type = strtol(optarg, NULL, 16);
+				debug(2, "Chassis type will be set to 0x%02X from [%s]", fruinfo.fru.chassis.type, optarg);
+				fruinfo.has_chassis = true;
 				break;
 			case 'a': // chassis-pn
-				fru_loadfield(chassis.pn.val, optarg);
-				has_chassis = true;
+				fru_loadfield(fruinfo.fru.chassis.pn.val, optarg);
+				fruinfo.has_chassis = true;
 				break;
 			case 'c': // chassis-serial
-				fru_loadfield(chassis.serial.val, optarg);
-				has_chassis = true;
+				fru_loadfield(fruinfo.fru.chassis.serial.val, optarg);
+				fruinfo.has_chassis = true;
 				break;
 			case 'C': // chassis-custom
 				debug(2, "Custom chassis field [%s]", optarg);
-				has_chassis = true;
-				custom = &chassis.cust;
+				fruinfo.has_chassis = true;
+				custom = &fruinfo.fru.chassis.cust;
 				break;
 			case 'n': // board-pname
-				fru_loadfield(board.pname.val, optarg);
-				has_board = true;
+				fru_loadfield(fruinfo.fru.board.pname.val, optarg);
+				fruinfo.has_board = true;
 				break;
 			case 'm': // board-mfg
-				fru_loadfield(board.mfg.val, optarg);
-				has_board = true;
+				fru_loadfield(fruinfo.fru.board.mfg.val, optarg);
+				fruinfo.has_board = true;
 				break;
 			case 'd': // board-date
 				debug(2, "Board manufacturing date will be set from [%s]", optarg);
-				if (!datestr_to_tv(optarg, &board.tv))
+				if (!datestr_to_tv(optarg, &fruinfo.fru.board.tv))
 					fatal("Invalid date/time format, use \"DD/MM/YYYY HH:MM:SS\"");
-				has_board = true;
+				fruinfo.has_board = true;
 				break;
 			case 'u': // board-date-unspec
 				no_curr_date = true;
 				break;
 			case 'p': // board-pn
-				fru_loadfield(board.pn.val, optarg);
-				has_board = true;
+				fru_loadfield(fruinfo.fru.board.pn.val, optarg);
+				fruinfo.has_board = true;
 				break;
 			case 's': // board-sn
-				fru_loadfield(board.serial.val, optarg);
-				has_board = true;
+				fru_loadfield(fruinfo.fru.board.serial.val, optarg);
+				fruinfo.has_board = true;
 				break;
 			case 'f': // board-file
-				fru_loadfield(board.file.val, optarg);
-				has_board = true;
+				fru_loadfield(fruinfo.fru.board.file.val, optarg);
+				fruinfo.has_board = true;
 				break;
 			case 'B': // board-custom
 				debug(2, "Custom board field [%s]", optarg);
-				has_board = true;
-				custom = &board.cust;
+				fruinfo.has_board = true;
+				custom = &fruinfo.fru.board.cust;
 				break;
 			case 'N': // prod-name
-				fru_loadfield(product.pname.val, optarg);
-				has_product = true;
+				fru_loadfield(fruinfo.fru.product.pname.val, optarg);
+				fruinfo.has_product = true;
 				break;
 			case 'G': // prod-mfg
-				fru_loadfield(product.mfg.val, optarg);
-				has_product = true;
+				fru_loadfield(fruinfo.fru.product.mfg.val, optarg);
+				fruinfo.has_product = true;
 				break;
 			case 'M': // prod-modelpn
-				fru_loadfield(product.pn.val, optarg);
-				has_product = true;
+				fru_loadfield(fruinfo.fru.product.pn.val, optarg);
+				fruinfo.has_product = true;
 				break;
 			case 'V': // prod-version
-				fru_loadfield(product.ver.val, optarg);
-				has_product = true;
+				fru_loadfield(fruinfo.fru.product.ver.val, optarg);
+				fruinfo.has_product = true;
 				break;
 			case 'S': // prod-serial
-				fru_loadfield(product.serial.val, optarg);
-				has_product = true;
+				fru_loadfield(fruinfo.fru.product.serial.val, optarg);
+				fruinfo.has_product = true;
 				break;
 			case 'F': // prod-file
-				fru_loadfield(product.file.val, optarg);
-				has_product = true;
+				fru_loadfield(fruinfo.fru.product.file.val, optarg);
+				fruinfo.has_product = true;
 				break;
 			case 'A': // prod-atag
-				fru_loadfield(product.atag.val, optarg);
-				has_product = true;
+				fru_loadfield(fruinfo.fru.product.atag.val, optarg);
+				fruinfo.has_product = true;
 				break;
 			case 'P': // prod-custom
 				debug(2, "Custom product field [%s]", optarg);
-				has_product = true;
-				custom = &product.cust;
+				fruinfo.has_product = true;
+				custom = &fruinfo.fru.product.cust;
 				break;
 			case 'U': // All multi-record options must be listed here
 			          // and processed later in a separate switch
@@ -1257,11 +720,11 @@ int main(int argc, char *argv[])
 		}
 
 		if (is_mr_record) {
-			fru_mr_reclist_t *mr_reclist_tail = add_mr_reclist(&mr_reclist);
+			fru_mr_reclist_t *mr_reclist_tail = add_mr_reclist(&fruinfo.fru.mr_reclist);
 			if (!mr_reclist_tail) {
 				fatal("Failed to allocate multirecord area list");
 			}
-			has_multirec = true;
+			fruinfo.has_multirec = true;
 
 			switch(opt) {
 				case 'U': // UUID
@@ -1306,11 +769,11 @@ int main(int argc, char *argv[])
 	fname = argv[optind];
 
 	if (!strcmp("-", fname)) {
-		if (outformat == FRUGEN_FMT_BINARY)
+		if (config.outformat == FRUGEN_FMT_BINARY)
 #ifdef __HAS_JSON__
-			outformat = FRUGEN_FMT_JSON;
+			config.outformat = FRUGEN_FMT_JSON;
 #else
-			outformat = FRUGEN_FMT_TEXTOUT;
+			config.outformat = FRUGEN_FMT_TEXTOUT;
 #endif
 
 		fp = stdout;
@@ -1319,98 +782,14 @@ int main(int argc, char *argv[])
 	else
 		debug(1, "FRU info data will be stored in %s", fname);
 
-	switch (outformat) {
-	case FRUGEN_FMT_JSON: {
-		struct json_object *json_root = json_object_new_object();
-		struct json_object *section = NULL, *temp_obj = NULL;
-
-		if (!fp) {
-			fp = fopen(fname, "w");
-		}
-
-		if (!fp) {
-			fatal("Failed to open file '%s' for writing: %m", fname);
-		}
-
-		if (has_internal) {
-			section = json_object_new_string((char *)internal_use);
-			free(internal_use);
-			internal_use = NULL;
-			json_object_object_add(json_root, "internal", section);
-		}
-
-		if (has_chassis) {
-			section = json_object_new_object();
-			temp_obj = json_object_new_int(chassis.type);
-			json_object_object_add(section, "type", temp_obj);
-			json_object_add_with_type(section, "pn", chassis.pn.val, chassis.pn.type);
-			json_object_add_with_type(section, "serial", chassis.serial.val, chassis.serial.type);
-			temp_obj = json_object_new_array();
-			fru_reclist_t *next = chassis.cust;
-			while (next != NULL) {
-				json_object_add_with_type(temp_obj, NULL, next->rec->data,
-				                          typelen2ind(next->rec->typelen));
-				next = next->next;
-			}
-			json_object_object_add(section, "custom", temp_obj);
-			json_object_object_add(json_root, "chassis", section);
-		}
-
-		if (has_product) {
-			section = json_object_new_object();
-			temp_obj = json_object_new_int(product.lang);
-			json_object_object_add(section, "lang", temp_obj);
-			json_object_add_with_type(section, "mfg", product.mfg.val, product.mfg.type);
-			json_object_add_with_type(section, "pname", product.pname.val, product.pname.type);
-			json_object_add_with_type(section, "serial", product.serial.val, product.serial.type);
-			json_object_add_with_type(section, "pn", product.pn.val, product.pn.type);
-			json_object_add_with_type(section, "ver", product.ver.val, product.ver.type);
-			json_object_add_with_type(section, "atag", product.atag.val, product.atag.type);
-			json_object_add_with_type(section, "file", product.file.val, product.file.type);
-			temp_obj = json_object_new_array();
-			fru_reclist_t *next = product.cust;
-			while (next != NULL) {
-				json_object_add_with_type(temp_obj, NULL, next->rec->data,
-				                          typelen2ind(next->rec->typelen));
-				next = next->next;
-			}
-			json_object_object_add(section, "custom", temp_obj);
-			json_object_object_add(json_root, "product", section);
-		}
-
-		if (has_board) {
-			char timebuf[20] = {0};
-			struct tm* bdtime = gmtime(&board.tv.tv_sec);
-			strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
-			section = json_object_new_object();
-			temp_obj = json_object_new_int(board.lang);
-			json_object_object_add(section, "lang", temp_obj);
-			json_object_add_with_type(section, "date", (unsigned char*) timebuf, 0);
-			json_object_add_with_type(section, "mfg", board.mfg.val, board.mfg.type);
-			json_object_add_with_type(section, "pname", board.pname.val, board.pname.type);
-			json_object_add_with_type(section, "serial", board.serial.val, board.serial.type);
-			json_object_add_with_type(section, "pn", board.pn.val, board.pn.type);
-			json_object_add_with_type(section, "file", board.file.val, board.file.type);
-			temp_obj = json_object_new_array();
-			fru_reclist_t *next = board.cust;
-			while (next != NULL) {
-				json_object_add_with_type(temp_obj, NULL, next->rec->data,
-				                          typelen2ind(next->rec->typelen));
-				next = next->next;
-			}
-			json_object_object_add(section, "custom", temp_obj);
-			json_object_object_add(json_root, "board", section);
-		}
-		if (has_multirec) {
-			json_object *jso = NULL;
-			json_from_mr_reclist(&jso, mr_reclist, flags);
-			json_object_object_add(json_root, "multirecord", jso);
-		}
-		json_object_to_fd(fileno(fp), json_root,
-		                  JSON_C_TO_STRING_PRETTY | JSON_C_TO_STRING_SPACED);
-		json_object_put(json_root);
-		}
+	switch (config.outformat) {
+#ifdef __HAS_JSON__
+	case FRUGEN_FMT_JSON:
+		save_to_json_file(&fp, fname, &fruinfo, &config);
+		free(fruinfo.fru.internal_use);
+		fruinfo.fru.internal_use = NULL;
 		break;
+#endif
 	case FRUGEN_FMT_TEXTOUT: {
 		if (!fp) {
 			fp = fopen(fname, "w");
@@ -1420,25 +799,25 @@ int main(int argc, char *argv[])
 			fatal("Failed to open file '%s' for writing: %m", fname);
 		}
 
-		if (has_internal) {
+		if (fruinfo.has_internal) {
 			fru_internal_use_area_t *internal;
 			uint8_t *blocklen = &areas[FRU_INTERNAL_USE].blocks;
-			fputs("Internal use area", fp);
-			internal = fru_encode_internal_use_area(internal_use, blocklen);
+			fputs("Internal use area\n", fp);
+			internal = fru_encode_internal_use_area(fruinfo.fru.internal_use, blocklen);
 			if (!internal)
 				fatal("Failed to encode internal use area: %m\n"
 				      "Check that the value is a hex string of even bytes length");
-			free(internal_use);
-			internal_use = NULL;
+			free(fruinfo.fru.internal_use);
+			fruinfo.fru.internal_use = NULL;
 			fhexdump(fp, "\t", internal->data, FRU_BYTES(*blocklen));
 		}
 
-		if (has_chassis) {
-			fputs("Chassis", fp);
-			fprintf(fp, "\ttype: %u\n", chassis.type);
-			fprintf(fp, "\tpn(%s): %s\n", enc_names[chassis.pn.type], chassis.pn.val);
-			fprintf(fp, "\tserial(%s): %s\n", enc_names[chassis.serial.type], chassis.serial.val);
-			fru_reclist_t *next = chassis.cust;
+		if (fruinfo.has_chassis) {
+			fputs("Chassis\n", fp);
+			fprintf(fp, "\ttype: %u\n", fruinfo.fru.chassis.type);
+			fprintf(fp, "\tpn(%s): %s\n", enc_names[fruinfo.fru.chassis.pn.type], fruinfo.fru.chassis.pn.val);
+			fprintf(fp, "\tserial(%s): %s\n", enc_names[fruinfo.fru.chassis.serial.type], fruinfo.fru.chassis.serial.val);
+			fru_reclist_t *next = fruinfo.fru.chassis.cust;
 			while (next != NULL) {
 				fprintf(fp, "\tcustom(%s): %s\n",
 				       enc_names[typelen2ind(next->rec->typelen)],
@@ -1447,17 +826,17 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		if (has_product) {
-			fputs("Product", fp);
-			fprintf(fp, "\tlang: %u\n", product.lang);
-			fprintf(fp, "\tmfg(%s): %s\n", enc_names[product.mfg.type], product.mfg.val);
-			fprintf(fp, "\tpname(%s): %s\n", enc_names[product.pname.type], product.pname.val);
-			fprintf(fp, "\tserial(%s): %s\n", enc_names[product.serial.type], product.serial.val);
-			fprintf(fp, "\tpn(%s): %s\n", enc_names[product.pn.type], product.pn.val);
-			fprintf(fp, "\tver(%s): %s\n", enc_names[product.ver.type], product.ver.val);
-			fprintf(fp, "\tatag(%s): %s\n", enc_names[product.atag.type], product.atag.val);
-			fprintf(fp, "\tfile(%s): %s\n", enc_names[product.file.type], product.file.val);
-			fru_reclist_t *next = product.cust;
+		if (fruinfo.has_product) {
+			fputs("Product\n", fp);
+			fprintf(fp, "\tlang: %u\n", fruinfo.fru.product.lang);
+			fprintf(fp, "\tmfg(%s): %s\n", enc_names[fruinfo.fru.product.mfg.type], fruinfo.fru.product.mfg.val);
+			fprintf(fp, "\tpname(%s): %s\n", enc_names[fruinfo.fru.product.pname.type], fruinfo.fru.product.pname.val);
+			fprintf(fp, "\tserial(%s): %s\n", enc_names[fruinfo.fru.product.serial.type], fruinfo.fru.product.serial.val);
+			fprintf(fp, "\tpn(%s): %s\n", enc_names[fruinfo.fru.product.pn.type], fruinfo.fru.product.pn.val);
+			fprintf(fp, "\tver(%s): %s\n", enc_names[fruinfo.fru.product.ver.type], fruinfo.fru.product.ver.val);
+			fprintf(fp, "\tatag(%s): %s\n", enc_names[fruinfo.fru.product.atag.type], fruinfo.fru.product.atag.val);
+			fprintf(fp, "\tfile(%s): %s\n", enc_names[fruinfo.fru.product.file.type], fruinfo.fru.product.file.val);
+			fru_reclist_t *next = fruinfo.fru.product.cust;
 			while (next != NULL) {
 				fprintf(fp, "\tcustom(%s): %s\n",
 				       enc_names[typelen2ind(next->rec->typelen)],
@@ -1466,20 +845,20 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		if (has_board) {
+		if (fruinfo.has_board) {
 			char timebuf[20] = {0};
-			struct tm* bdtime = gmtime(&board.tv.tv_sec);
+			struct tm* bdtime = gmtime(&fruinfo.fru.board.tv.tv_sec);
 			strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
 
-			fputs("Board", fp);
-			fprintf(fp, "\tlang: %u\n", board.lang);
+			fputs("Board\n", fp);
+			fprintf(fp, "\tlang: %u\n", fruinfo.fru.board.lang);
 			fprintf(fp, "\tdate: %s\n", timebuf);
-			fprintf(fp, "\tmfg(%s): %s\n", enc_names[board.mfg.type], board.mfg.val);
-			fprintf(fp, "\tpname(%s): %s\n", enc_names[board.pname.type], board.pname.val);
-			fprintf(fp, "\tserial(%s): %s\n", enc_names[board.serial.type], board.serial.val);
-			fprintf(fp, "\tpn(%s): %s\n", enc_names[board.pn.type], board.pn.val);
-			fprintf(fp, "\tfile(%s): %s\n", enc_names[board.file.type], board.file.val);
-			fru_reclist_t *next = board.cust;
+			fprintf(fp, "\tmfg(%s): %s\n", enc_names[fruinfo.fru.board.mfg.type], fruinfo.fru.board.mfg.val);
+			fprintf(fp, "\tpname(%s): %s\n", enc_names[fruinfo.fru.board.pname.type], fruinfo.fru.board.pname.val);
+			fprintf(fp, "\tserial(%s): %s\n", enc_names[fruinfo.fru.board.serial.type], fruinfo.fru.board.serial.val);
+			fprintf(fp, "\tpn(%s): %s\n", enc_names[fruinfo.fru.board.pn.type], fruinfo.fru.board.pn.val);
+			fprintf(fp, "\tfile(%s): %s\n", enc_names[fruinfo.fru.board.file.type], fruinfo.fru.board.file.val);
+			fru_reclist_t *next = fruinfo.fru.board.cust;
 			while (next != NULL) {
 				fprintf(fp, "\tcustom(%s): %s\n",
 				       enc_names[typelen2ind(next->rec->typelen)],
@@ -1488,11 +867,11 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		if (has_multirec) {
-			fru_mr_reclist_t *entry = mr_reclist;
+		if (fruinfo.has_multirec) {
+			fru_mr_reclist_t *entry = fruinfo.fru.mr_reclist;
 			size_t count = 0;
-			fputs("Multirecord", fp);
-			fputs("\tNOTE: Data decoding is only available in JSON mode", fp);
+			fputs("Multirecord\n", fp);
+			fputs("\tNOTE: Data decoding is only available in JSON mode\n", fp);
 
 			while (entry) {
 				fprintf(fp, "\trecord %03zd:\n", count++);
@@ -1506,27 +885,27 @@ int main(int argc, char *argv[])
 		}
 	default:
 	case FRUGEN_FMT_BINARY:
-		if (has_internal) {
+		if (fruinfo.has_internal) {
 			fru_internal_use_area_t *internal;
 			uint8_t *blocklen = &areas[FRU_INTERNAL_USE].blocks;
 			debug(1, "FRU file will have an internal use area");
-			internal = fru_encode_internal_use_area(internal_use, blocklen);
+			internal = fru_encode_internal_use_area(fruinfo.fru.internal_use, blocklen);
 			if (!internal)
 				fatal("Failed to encode internal use area: %m\n"
 				      "Check that the value is a hex string of even bytes length");
-			free(internal_use);
-			internal_use = NULL;
+			free(fruinfo.fru.internal_use);
+			fruinfo.fru.internal_use = NULL;
 			areas[FRU_INTERNAL_USE].data = internal;
 		}
 
-		if (has_chassis) {
+		if (fruinfo.has_chassis) {
 			int e;
 			fru_chassis_area_t *ci = NULL;
 			debug(1, "FRU file will have a chassis information area");
-			debug(3, "Chassis information area's custom field list is %p", chassis.cust);
-			ci = fru_encode_chassis_info(&chassis);
+			debug(3, "Chassis information area's custom field list is %p", fruinfo.fru.chassis.cust);
+			ci = fru_encode_chassis_info(&fruinfo.fru.chassis);
 			e = errno;
-			free_reclist(chassis.cust);
+			free_reclist(fruinfo.fru.chassis.cust);
 
 			if (ci)
 				areas[FRU_CHASSIS_INFO].data = ci;
@@ -1536,21 +915,21 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		if (has_board) {
+		if (fruinfo.has_board) {
 			int e;
 			fru_board_area_t *bi = NULL;
 			debug(1, "FRU file will have a board information area");
-			debug(3, "Board information area's custom field list is %p", board.cust);
-			debug(3, "Board date is specified? = %d", has_bdate);
+			debug(3, "Board information area's custom field list is %p", fruinfo.fru.board.cust);
+			debug(3, "Board date is specified? = %d", fruinfo.has_bdate);
 			debug(3, "Board date use unspec? = %d", no_curr_date);
-			if (!has_bdate && no_curr_date) {
+			if (!fruinfo.has_bdate && no_curr_date) {
 				debug(1, "Using 'unspecified' board mfg. date");
-				board.tv = (struct timeval){0};
+				fruinfo.fru.board.tv = (struct timeval){0};
 			}
 
-			bi = fru_encode_board_info(&board);
+			bi = fru_encode_board_info(&fruinfo.fru.board);
 			e = errno;
-			free_reclist(board.cust);
+			free_reclist(fruinfo.fru.board.cust);
 
 			if (bi)
 				areas[FRU_BOARD_INFO].data = bi;
@@ -1560,15 +939,15 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		if (has_product) {
+		if (fruinfo.has_product) {
 			int e;
 			fru_product_area_t *pi = NULL;
 			debug(1, "FRU file will have a product information area");
-			debug(3, "Product information area's custom field list is %p", product.cust);
-			pi = fru_encode_product_info(&product);
+			debug(3, "Product information area's custom field list is %p", fruinfo.fru.product.cust);
+			pi = fru_encode_product_info(&fruinfo.fru.product);
 
 			e = errno;
-			free_reclist(product.cust);
+			free_reclist(fruinfo.fru.product.cust);
 
 			if (pi)
 				areas[FRU_PRODUCT_INFO].data = pi;
@@ -1578,16 +957,16 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		if (has_multirec) {
+		if (fruinfo.has_multirec) {
 			int e;
 			fru_mr_area_t *mr = NULL;
 			size_t totalbytes = 0;
 			debug(1, "FRU file will have a multirecord area");
-			debug(3, "Multirecord area record list is %p", mr_reclist);
-			mr = fru_encode_mr_area(mr_reclist, &totalbytes);
+			debug(3, "Multirecord area record list is %p", fruinfo.fru.mr_reclist);
+			mr = fru_encode_mr_area(fruinfo.fru.mr_reclist, &totalbytes);
 
 			e = errno;
-			free_reclist(mr_reclist);
+			free_reclist(fruinfo.fru.mr_reclist);
 
 			if (mr) {
 				areas[FRU_MULTIRECORD].data = mr;

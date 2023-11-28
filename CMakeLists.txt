@@ -59,8 +59,16 @@ if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
   list(APPEND ALL_TARGETS "fru-static")
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
+# looking for JSON library
+find_library(JSON_LIB json-c)
+
 # target for frugen
-add_executable(frugen frugen.c)
+set(frugen_SOURCES)
+list(APPEND frugen_SOURCES frugen.c)
+if(JSON_LIB)
+  list(APPEND frugen_SOURCES frugen-json.c)
+endif(JSON_LIB)
+add_executable(frugen ${frugen_SOURCES})
 list(APPEND ALL_TARGETS "frugen")
 if(BINARY_STATIC)
   target_link_libraries(frugen fru-static -static)
@@ -70,8 +78,6 @@ else(BINARY_STATIC)
   target_link_libraries(frugen fru-shared)
 endif(BINARY_STATIC)
 
-# looking for JSON library
-find_library(JSON_LIB json-c)
 if(JSON_LIB)
   message (STATUS "Using JSON Library found at " ${JSON_LIB})
   add_definitions(-D__HAS_JSON__)
