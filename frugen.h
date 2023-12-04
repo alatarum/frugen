@@ -21,6 +21,7 @@ typedef enum {
 
 struct frugen_fruinfo_s {
 	fru_exploded_t fru;
+	fru_area_t areas[FRU_MAX_AREAS];
 	bool has_chassis;
 	bool has_board;
 	bool has_bdate;
@@ -33,6 +34,7 @@ struct frugen_config_s {
 	frugen_format_t format;
 	frugen_format_t outformat;
 	fru_flags_t flags;
+	bool no_curr_date; // Don't use current timestamp if no 'date' is specified
 };
 
 extern volatile int debug_level;

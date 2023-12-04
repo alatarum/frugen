@@ -211,7 +211,121 @@ static struct frugen_config_s config = {
 	.format = FRUGEN_FMT_UNSET,
 	.outformat = FRUGEN_FMT_BINARY, /* Default binary output */
 	.flags = FRU_NOFLAGS,
+	.no_curr_date = false,
 };
+
+void load_from_binary_file(const char *fname,
+                           const struct frugen_config_s *config,
+                           struct frugen_fruinfo_s *info)
+{
+	assert(fname);
+	size_t mr_size;
+	int fd = open(fname, O_RDONLY);
+	debug(2, "Data format is BINARY");
+	if (fd < 0) {
+		fatal("Failed to open file: %m");
+	}
+
+	struct stat statbuf = {0};
+	if (fstat(fd, &statbuf)) {
+		fatal("Failed to get file properties: %m");
+	}
+	if (statbuf.st_size > MAX_FILE_SIZE) {
+		fatal("File too large");
+	}
+
+	uint8_t *buffer = calloc(1, statbuf.st_size);
+	if (buffer == NULL) {
+		fatal("Cannot allocate buffer");
+	}
+
+	debug(2, "Reading the template file of size %lu...", statbuf.st_size);
+	if (read(fd, buffer, statbuf.st_size) != statbuf.st_size) {
+		fatal("Cannot read file");
+	}
+	close(fd);
+
+	errno = 0;
+	size_t iu_size;
+	fru_internal_use_area_t *internal_area =
+		find_fru_internal_use_area(buffer, &iu_size, statbuf.st_size,
+								   config->flags);
+	if (internal_area) {
+		debug(2, "Found an internal use area of size %zd", iu_size);
+
+		if (!fru_decode_internal_use_area(internal_area, iu_size,
+										  &info->fru.internal_use,
+										  config->flags))
+		{
+			fatal("Failed to decode interal use area");
+		}
+
+		debug(2, "Internal use area: %s", info->fru.internal_use);
+		info->has_internal = true;
+	}
+	else {
+		debug(2, "No internal use area found: %m");
+	}
+
+	errno = 0;
+	fru_chassis_area_t *chassis_area =
+		find_fru_chassis_area(buffer, statbuf.st_size, config->flags);
+	if (chassis_area) {
+		debug(2, "Found a chassis area");
+		if (!fru_decode_chassis_info(chassis_area, &info->fru.chassis))
+			fatal("Failed to decode chassis");
+		info->has_chassis = true;
+	}
+	else {
+		debug(2, "No chassis area found: %m");
+	}
+
+	errno = 0;
+	fru_board_area_t *board_area =
+		find_fru_board_area(buffer, statbuf.st_size, config->flags);
+	if (board_area) {
+		debug(2, "Found a board area");
+		if (!fru_decode_board_info(board_area, &info->fru.board))
+			fatal("Failed to decode board");
+		info->has_board = true;
+	}
+	else {
+		debug(2, "No board area found");
+	}
+
+	errno = 0;
+	fru_product_area_t *product_area =
+		find_fru_product_area(buffer, statbuf.st_size, config->flags);
+	if (product_area) {
+		debug(2, "Found a product area");
+		if (!fru_decode_product_info(product_area, &info->fru.product))
+			fatal("Failed to decode product");
+		info->has_product = true;
+	}
+	else {
+		debug(2, "No product area found");
+	}
+
+	errno = 0;
+	mr_size = 0;
+	fru_mr_area_t *mr_area =
+		find_fru_mr_area(buffer, &mr_size, statbuf.st_size, config->flags);
+	if (mr_area) {
+		int rec_cnt;
+		debug(2, "Found a multirecord area of size %zd", mr_size);
+		rec_cnt = fru_decode_mr_area(mr_area, &info->fru.mr_reclist,
+									 mr_size, config->flags);
+		if (0 > rec_cnt)
+			fatal("Failed to decode multirecord area");
+		debug(2, "Loaded %d records from the multirecord area", rec_cnt);
+		info->has_multirec = true;
+	}
+	else {
+		debug(2, "No multirecord area found: %m");
+	}
+
+	free(buffer);
+}
 
 void load_fromfile(const char *fname,
                    const struct frugen_config_s *config,
@@ -225,131 +339,267 @@ void load_fromfile(const char *fname,
 		load_from_json_file(fname, info);
 		break;
 #endif /* __HAS_JSON__ */
-	case FRUGEN_FMT_BINARY: {
-		size_t mr_size;
-		int fd = open(fname, O_RDONLY);
-		debug(2, "Data format is BINARY");
-		if (fd < 0) {
-			fatal("Failed to open file: %m");
-		}
-
-		struct stat statbuf = {0};
-		if (fstat(fd, &statbuf)) {
-			fatal("Failed to get file properties: %m");
-		}
-		if (statbuf.st_size > MAX_FILE_SIZE) {
-			fatal("File too large");
-		}
-
-		uint8_t *buffer = calloc(1, statbuf.st_size);
-		if (buffer == NULL) {
-			fatal("Cannot allocate buffer");
-		}
-
-		debug(2, "Reading the template file of size %lu...", statbuf.st_size);
-		if (read(fd, buffer, statbuf.st_size) != statbuf.st_size) {
-			fatal("Cannot read file");
-		}
-		close(fd);
-
-		errno = 0;
-		size_t iu_size;
-		fru_internal_use_area_t *internal_area =
-			find_fru_internal_use_area(buffer, &iu_size, statbuf.st_size,
-			                           config->flags);
-		if (internal_area) {
-			debug(2, "Found an internal use area of size %zd", iu_size);
-
-			if (!fru_decode_internal_use_area(internal_area, iu_size,
-			                                  &info->fru.internal_use,
-			                                  config->flags))
-			{
-				fatal("Failed to decode interal use area");
-			}
-
-			debug(2, "Internal use area: %s", info->fru.internal_use);
-			info->has_internal = true;
-		}
-		else {
-			debug(2, "No internal use area found: %m");
-		}
-
-		errno = 0;
-		fru_chassis_area_t *chassis_area =
-			find_fru_chassis_area(buffer, statbuf.st_size, config->flags);
-		if (chassis_area) {
-			debug(2, "Found a chassis area");
-			if (!fru_decode_chassis_info(chassis_area, &info->fru.chassis))
-				fatal("Failed to decode chassis");
-			info->has_chassis = true;
-		}
-		else {
-			debug(2, "No chassis area found: %m");
-		}
-
-		errno = 0;
-		fru_board_area_t *board_area =
-			find_fru_board_area(buffer, statbuf.st_size, config->flags);
-		if (board_area) {
-			debug(2, "Found a board area");
-			if (!fru_decode_board_info(board_area, &info->fru.board))
-				fatal("Failed to decode board");
-			info->has_board = true;
-		}
-		else {
-			debug(2, "No board area found");
-		}
-
-		errno = 0;
-		fru_product_area_t *product_area =
-			find_fru_product_area(buffer, statbuf.st_size, config->flags);
-		if (product_area) {
-			debug(2, "Found a product area");
-			if (!fru_decode_product_info(product_area, &info->fru.product))
-				fatal("Failed to decode product");
-			info->has_product = true;
-		}
-		else {
-			debug(2, "No product area found");
-		}
-
-		errno = 0;
-		mr_size = 0;
-		fru_mr_area_t *mr_area =
-			find_fru_mr_area(buffer, &mr_size, statbuf.st_size, config->flags);
-		if (mr_area) {
-			int rec_cnt;
-			debug(2, "Found a multirecord area of size %zd", mr_size);
-			rec_cnt = fru_decode_mr_area(mr_area, &info->fru.mr_reclist,
-			                             mr_size, config->flags);
-			if (0 > rec_cnt)
-				fatal("Failed to decode multirecord area");
-			debug(2, "Loaded %d records from the multirecord area", rec_cnt);
-			info->has_multirec = true;
-		}
-		else {
-			debug(2, "No multirecord area found: %m");
-		}
-
-		free(buffer);
+	case FRUGEN_FMT_BINARY:
+		load_from_binary_file(fname, config, info);
 		break;
-		}
 	default:
 		fatal("Please specify the input file format");
 		break;
 	}
 }
 
+/**
+ * Save the decoded FRU from \a info into a text file specified
+ * by \a *fp or \a fname.
+ *
+ * @param[in,out] fp     Pointer to the file pointer to use for output.
+ *                       If \a *fp is NULL, \a fname will be opened, and
+ *                       the pointer to it will be stored in \a *fp.
+ * @param[in]     fname  Filename to open when \a *fp is NULL, may be NULL otherwise
+ * @param[in]     info   The FRU information structure to get the FRU data from
+ * @param[in]     config Various frugen configuration settings structure
+ */
+void save_to_text_file(FILE **fp, const char *fname,
+                       const struct frugen_fruinfo_s *info,
+                       const struct frugen_config_s *config)
+{
+	(void)config; /* Silence the compiler, maybe use later */
+
+	if (!*fp) {
+		*fp = fopen(fname, "w");
+	}
+
+	if (!*fp) {
+		fatal("Failed to open file '%s' for writing: %m", fname);
+	}
+
+	if (info->has_internal) {
+		fru_internal_use_area_t *internal;
+		uint8_t blocklen = info->areas[FRU_INTERNAL_USE].blocks;
+		fputs("Internal use area\n", *fp);
+		internal = fru_encode_internal_use_area(info->fru.internal_use, &blocklen);
+		if (!internal)
+			fatal("Failed to encode internal use area: %m\n"
+				  "Check that the value is a hex string of even bytes length");
+		fhexdump(*fp, "\t", internal->data, FRU_BYTES(blocklen));
+	}
+
+	if (info->has_chassis) {
+		fputs("Chassis\n", *fp);
+		fprintf(*fp, "\ttype: %u\n", info->fru.chassis.type);
+		fprintf(*fp, "\tpn(%s): %s\n", enc_names[info->fru.chassis.pn.type], info->fru.chassis.pn.val);
+		fprintf(*fp, "\tserial(%s): %s\n", enc_names[info->fru.chassis.serial.type], info->fru.chassis.serial.val);
+		fru_reclist_t *next = info->fru.chassis.cust;
+		while (next != NULL) {
+			fprintf(*fp, "\tcustom(%s): %s\n",
+				   enc_names[typelen2ind(next->rec->typelen)],
+				   next->rec->data);
+			next = next->next;
+		}
+	}
+
+	if (info->has_product) {
+		fputs("Product\n", *fp);
+		fprintf(*fp, "\tlang: %u\n", info->fru.product.lang);
+		fprintf(*fp, "\tmfg(%s): %s\n", enc_names[info->fru.product.mfg.type], info->fru.product.mfg.val);
+		fprintf(*fp, "\tpname(%s): %s\n", enc_names[info->fru.product.pname.type], info->fru.product.pname.val);
+		fprintf(*fp, "\tserial(%s): %s\n", enc_names[info->fru.product.serial.type], info->fru.product.serial.val);
+		fprintf(*fp, "\tpn(%s): %s\n", enc_names[info->fru.product.pn.type], info->fru.product.pn.val);
+		fprintf(*fp, "\tver(%s): %s\n", enc_names[info->fru.product.ver.type], info->fru.product.ver.val);
+		fprintf(*fp, "\tatag(%s): %s\n", enc_names[info->fru.product.atag.type], info->fru.product.atag.val);
+		fprintf(*fp, "\tfile(%s): %s\n", enc_names[info->fru.product.file.type], info->fru.product.file.val);
+		fru_reclist_t *next = info->fru.product.cust;
+		while (next != NULL) {
+			fprintf(*fp, "\tcustom(%s): %s\n",
+				   enc_names[typelen2ind(next->rec->typelen)],
+				   next->rec->data);
+			next = next->next;
+		}
+	}
+
+	if (info->has_board) {
+		char timebuf[20] = {0};
+		struct tm* bdtime = gmtime(&info->fru.board.tv.tv_sec);
+		strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
+
+		fputs("Board\n", *fp);
+		fprintf(*fp, "\tlang: %u\n", info->fru.board.lang);
+		fprintf(*fp, "\tdate: %s\n", timebuf);
+		fprintf(*fp, "\tmfg(%s): %s\n", enc_names[info->fru.board.mfg.type], info->fru.board.mfg.val);
+		fprintf(*fp, "\tpname(%s): %s\n", enc_names[info->fru.board.pname.type], info->fru.board.pname.val);
+		fprintf(*fp, "\tserial(%s): %s\n", enc_names[info->fru.board.serial.type], info->fru.board.serial.val);
+		fprintf(*fp, "\tpn(%s): %s\n", enc_names[info->fru.board.pn.type], info->fru.board.pn.val);
+		fprintf(*fp, "\tfile(%s): %s\n", enc_names[info->fru.board.file.type], info->fru.board.file.val);
+		fru_reclist_t *next = info->fru.board.cust;
+		while (next != NULL) {
+			fprintf(*fp, "\tcustom(%s): %s\n",
+				   enc_names[typelen2ind(next->rec->typelen)],
+				   next->rec->data);
+			next = next->next;
+		}
+	}
+
+	if (info->has_multirec) {
+		fru_mr_reclist_t *entry = info->fru.mr_reclist;
+		size_t count = 0;
+		fputs("Multirecord\n", *fp);
+		fputs("\tNOTE: Data decoding is only available in JSON mode\n", *fp);
+
+		while (entry) {
+			fprintf(*fp, "\trecord %03zd:\n", count++);
+			fhexdump(*fp, "\t\t", entry->rec, FRU_MR_REC_SZ(entry->rec));
+			if (IS_FRU_MR_END(entry->rec))
+				break;
+			entry = entry->next;
+		}
+	}
+}
+
+/**
+ * Save the encoded FRU from \a info into a binary file specified
+ * by \a fname.
+ *
+ * @param[in]     fname  Filename to open when \a *fp is NULL, may be NULL otherwise
+ * @param[in]     info   The FRU information structure to get the FRU data from
+ * @param[in]     config Various frugen configuration settings structure
+ */
+void save_to_binary_file(const char *fname,
+                         struct frugen_fruinfo_s *info,
+                         const struct frugen_config_s *config)
+{
+	fru_t *fru;
+	size_t size;
+	int fd;
+
+	if (info->has_internal) {
+		fru_internal_use_area_t *internal;
+		/* .blocks is used later by fru_create() */
+		uint8_t *blocklen = &info->areas[FRU_INTERNAL_USE].blocks;
+		debug(1, "FRU file will have an internal use area");
+		internal = fru_encode_internal_use_area(info->fru.internal_use, blocklen);
+		if (!internal)
+			fatal("Failed to encode internal use area: %m\n"
+				  "Check that the value is a hex string of even bytes length");
+		free(info->fru.internal_use);
+		info->fru.internal_use = NULL;
+		info->areas[FRU_INTERNAL_USE].data = internal;
+	}
+
+	if (info->has_chassis) {
+		int e;
+		fru_chassis_area_t *ci = NULL;
+		debug(1, "FRU file will have a chassis information area");
+		debug(3, "Chassis information area's custom field list is %p", info->fru.chassis.cust);
+		ci = fru_encode_chassis_info(&info->fru.chassis);
+		e = errno;
+		free_reclist(info->fru.chassis.cust);
+
+		if (ci)
+			info->areas[FRU_CHASSIS_INFO].data = ci;
+		else {
+			errno = e;
+			fatal("Error allocating a chassis info area: %m");
+		}
+	}
+
+	if (info->has_board) {
+		int e;
+		fru_board_area_t *bi = NULL;
+		debug(1, "FRU file will have a board information area");
+		debug(3, "Board information area's custom field list is %p", info->fru.board.cust);
+		debug(3, "Board date is specified? = %d", info->has_bdate);
+		debug(3, "Board date use unspec? = %d", config->no_curr_date);
+		if (!info->has_bdate && config->no_curr_date) {
+			debug(1, "Using 'unspecified' board mfg. date");
+			info->fru.board.tv = (struct timeval){0};
+		}
+
+		bi = fru_encode_board_info(&info->fru.board);
+		e = errno;
+		free_reclist(info->fru.board.cust);
+
+		if (bi)
+			info->areas[FRU_BOARD_INFO].data = bi;
+		else {
+			errno = e;
+			fatal("Error allocating a board info area: %m");
+		}
+	}
+
+	if (info->has_product) {
+		int e;
+		fru_product_area_t *pi = NULL;
+		debug(1, "FRU file will have a product information area");
+		debug(3, "Product information area's custom field list is %p", info->fru.product.cust);
+		pi = fru_encode_product_info(&info->fru.product);
+
+		e = errno;
+		free_reclist(info->fru.product.cust);
+
+		if (pi)
+			info->areas[FRU_PRODUCT_INFO].data = pi;
+		else {
+			errno = e;
+			fatal("Error allocating a product info area: %m");
+		}
+	}
+
+	if (info->has_multirec) {
+		int e;
+		fru_mr_area_t *mr = NULL;
+		size_t totalbytes = 0;
+		debug(1, "FRU file will have a multirecord area");
+		debug(3, "Multirecord area record list is %p", info->fru.mr_reclist);
+		mr = fru_encode_mr_area(info->fru.mr_reclist, &totalbytes);
+
+		e = errno;
+		free_reclist(info->fru.mr_reclist);
+
+		if (mr) {
+			info->areas[FRU_MULTIRECORD].data = mr;
+			info->areas[FRU_MULTIRECORD].blocks = FRU_BLOCKS(totalbytes);
+
+			debug_dump(3, mr, totalbytes, "Multirecord data:");
+		}
+		else {
+			errno = e;
+			fatal("Error allocating a multirecord area: %m");
+		}
+	}
+
+	fru = fru_create(info->areas, &size);
+	if (!fru) {
+		fatal("Error allocating a FRU file buffer: %m");
+	}
+
+	debug(1, "Writing %lu bytes of FRU data", (long unsigned int)FRU_BYTES(size));
+
+	fd = open(fname,
+#if __WIN32__ || __WIN64__
+			  O_CREAT | O_TRUNC | O_WRONLY | O_BINARY,
+#else
+			  O_CREAT | O_TRUNC | O_WRONLY,
+#endif
+			  0644);
+
+	if (fd < 0)
+		fatal("Couldn't create file %s: %m", fname);
+
+	if (0 > write(fd, fru, FRU_BYTES(size)))
+		fatal("Couldn't write to %s: %m", fname);
+
+	free(fru);
+	close(fd);
+
+}
+
 int main(int argc, char *argv[])
 {
 	size_t i;
 	FILE *fp = NULL;
-	int fd;
 	int opt;
 	int lindex;
 
-	fru_t *fru;
-	size_t size;
 	struct frugen_fruinfo_s fruinfo = {
 		.fru = {
 			.internal_use = NULL,
@@ -357,6 +607,13 @@ int main(int argc, char *argv[])
 			.board        = { .lang = LANG_ENGLISH },
 			.product      = { .lang = LANG_ENGLISH },
 			.mr_reclist   = NULL,
+		},
+		.areas = {
+			{ .atype = FRU_INTERNAL_USE },
+			{ .atype = FRU_CHASSIS_INFO },
+			{ .atype = FRU_BOARD_INFO, },
+			{ .atype = FRU_PRODUCT_INFO, },
+			{ .atype = FRU_MULTIRECORD }
 		},
 		.has_chassis  = false,
 		.has_board    = false,
@@ -367,17 +624,8 @@ int main(int argc, char *argv[])
 	};
 
 	bool cust_binary = false; // Flag: treat the following custom attribute as binary
-	bool no_curr_date = false; // Flag: don't use current timestamp if no 'date' is specified
 
 	const char *fname = NULL;
-
-	fru_area_t areas[FRU_MAX_AREAS] = {
-		{ .atype = FRU_INTERNAL_USE },
-		{ .atype = FRU_CHASSIS_INFO },
-		{ .atype = FRU_BOARD_INFO, },
-		{ .atype = FRU_PRODUCT_INFO, },
-		{ .atype = FRU_MULTIRECORD }
-	};
 
 	tzset();
 	gettimeofday(&fruinfo.fru.board.tv, NULL);
@@ -656,7 +904,7 @@ int main(int argc, char *argv[])
 				fruinfo.has_board = true;
 				break;
 			case 'u': // board-date-unspec
-				no_curr_date = true;
+				config.no_curr_date = true;
 				break;
 			case 'p': // board-pn
 				fru_loadfield(fruinfo.fru.board.pn.val, optarg);
@@ -790,218 +1038,15 @@ int main(int argc, char *argv[])
 		fruinfo.fru.internal_use = NULL;
 		break;
 #endif
-	case FRUGEN_FMT_TEXTOUT: {
-		if (!fp) {
-			fp = fopen(fname, "w");
-		}
-
-		if (!fp) {
-			fatal("Failed to open file '%s' for writing: %m", fname);
-		}
-
-		if (fruinfo.has_internal) {
-			fru_internal_use_area_t *internal;
-			uint8_t *blocklen = &areas[FRU_INTERNAL_USE].blocks;
-			fputs("Internal use area\n", fp);
-			internal = fru_encode_internal_use_area(fruinfo.fru.internal_use, blocklen);
-			if (!internal)
-				fatal("Failed to encode internal use area: %m\n"
-				      "Check that the value is a hex string of even bytes length");
-			free(fruinfo.fru.internal_use);
-			fruinfo.fru.internal_use = NULL;
-			fhexdump(fp, "\t", internal->data, FRU_BYTES(*blocklen));
-		}
-
-		if (fruinfo.has_chassis) {
-			fputs("Chassis\n", fp);
-			fprintf(fp, "\ttype: %u\n", fruinfo.fru.chassis.type);
-			fprintf(fp, "\tpn(%s): %s\n", enc_names[fruinfo.fru.chassis.pn.type], fruinfo.fru.chassis.pn.val);
-			fprintf(fp, "\tserial(%s): %s\n", enc_names[fruinfo.fru.chassis.serial.type], fruinfo.fru.chassis.serial.val);
-			fru_reclist_t *next = fruinfo.fru.chassis.cust;
-			while (next != NULL) {
-				fprintf(fp, "\tcustom(%s): %s\n",
-				       enc_names[typelen2ind(next->rec->typelen)],
-				       next->rec->data);
-				next = next->next;
-			}
-		}
-
-		if (fruinfo.has_product) {
-			fputs("Product\n", fp);
-			fprintf(fp, "\tlang: %u\n", fruinfo.fru.product.lang);
-			fprintf(fp, "\tmfg(%s): %s\n", enc_names[fruinfo.fru.product.mfg.type], fruinfo.fru.product.mfg.val);
-			fprintf(fp, "\tpname(%s): %s\n", enc_names[fruinfo.fru.product.pname.type], fruinfo.fru.product.pname.val);
-			fprintf(fp, "\tserial(%s): %s\n", enc_names[fruinfo.fru.product.serial.type], fruinfo.fru.product.serial.val);
-			fprintf(fp, "\tpn(%s): %s\n", enc_names[fruinfo.fru.product.pn.type], fruinfo.fru.product.pn.val);
-			fprintf(fp, "\tver(%s): %s\n", enc_names[fruinfo.fru.product.ver.type], fruinfo.fru.product.ver.val);
-			fprintf(fp, "\tatag(%s): %s\n", enc_names[fruinfo.fru.product.atag.type], fruinfo.fru.product.atag.val);
-			fprintf(fp, "\tfile(%s): %s\n", enc_names[fruinfo.fru.product.file.type], fruinfo.fru.product.file.val);
-			fru_reclist_t *next = fruinfo.fru.product.cust;
-			while (next != NULL) {
-				fprintf(fp, "\tcustom(%s): %s\n",
-				       enc_names[typelen2ind(next->rec->typelen)],
-				       next->rec->data);
-				next = next->next;
-			}
-		}
-
-		if (fruinfo.has_board) {
-			char timebuf[20] = {0};
-			struct tm* bdtime = gmtime(&fruinfo.fru.board.tv.tv_sec);
-			strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
-
-			fputs("Board\n", fp);
-			fprintf(fp, "\tlang: %u\n", fruinfo.fru.board.lang);
-			fprintf(fp, "\tdate: %s\n", timebuf);
-			fprintf(fp, "\tmfg(%s): %s\n", enc_names[fruinfo.fru.board.mfg.type], fruinfo.fru.board.mfg.val);
-			fprintf(fp, "\tpname(%s): %s\n", enc_names[fruinfo.fru.board.pname.type], fruinfo.fru.board.pname.val);
-			fprintf(fp, "\tserial(%s): %s\n", enc_names[fruinfo.fru.board.serial.type], fruinfo.fru.board.serial.val);
-			fprintf(fp, "\tpn(%s): %s\n", enc_names[fruinfo.fru.board.pn.type], fruinfo.fru.board.pn.val);
-			fprintf(fp, "\tfile(%s): %s\n", enc_names[fruinfo.fru.board.file.type], fruinfo.fru.board.file.val);
-			fru_reclist_t *next = fruinfo.fru.board.cust;
-			while (next != NULL) {
-				fprintf(fp, "\tcustom(%s): %s\n",
-				       enc_names[typelen2ind(next->rec->typelen)],
-				       next->rec->data);
-				next = next->next;
-			}
-		}
-
-		if (fruinfo.has_multirec) {
-			fru_mr_reclist_t *entry = fruinfo.fru.mr_reclist;
-			size_t count = 0;
-			fputs("Multirecord\n", fp);
-			fputs("\tNOTE: Data decoding is only available in JSON mode\n", fp);
-
-			while (entry) {
-				fprintf(fp, "\trecord %03zd:\n", count++);
-				fhexdump(fp, "\t\t", entry->rec, FRU_MR_REC_SZ(entry->rec));
-				if (IS_FRU_MR_END(entry->rec))
-					break;
-				entry = entry->next;
-			}
-		}
+	case FRUGEN_FMT_TEXTOUT:
+		save_to_text_file(&fp, fname, &fruinfo, &config);
+		free(fruinfo.fru.internal_use);
+		fruinfo.fru.internal_use = NULL;
 		break;
-		}
+
 	default:
 	case FRUGEN_FMT_BINARY:
-		if (fruinfo.has_internal) {
-			fru_internal_use_area_t *internal;
-			uint8_t *blocklen = &areas[FRU_INTERNAL_USE].blocks;
-			debug(1, "FRU file will have an internal use area");
-			internal = fru_encode_internal_use_area(fruinfo.fru.internal_use, blocklen);
-			if (!internal)
-				fatal("Failed to encode internal use area: %m\n"
-				      "Check that the value is a hex string of even bytes length");
-			free(fruinfo.fru.internal_use);
-			fruinfo.fru.internal_use = NULL;
-			areas[FRU_INTERNAL_USE].data = internal;
-		}
+		save_to_binary_file(fname, &fruinfo, &config);
 
-		if (fruinfo.has_chassis) {
-			int e;
-			fru_chassis_area_t *ci = NULL;
-			debug(1, "FRU file will have a chassis information area");
-			debug(3, "Chassis information area's custom field list is %p", fruinfo.fru.chassis.cust);
-			ci = fru_encode_chassis_info(&fruinfo.fru.chassis);
-			e = errno;
-			free_reclist(fruinfo.fru.chassis.cust);
-
-			if (ci)
-				areas[FRU_CHASSIS_INFO].data = ci;
-			else {
-				errno = e;
-				fatal("Error allocating a chassis info area: %m");
-			}
-		}
-
-		if (fruinfo.has_board) {
-			int e;
-			fru_board_area_t *bi = NULL;
-			debug(1, "FRU file will have a board information area");
-			debug(3, "Board information area's custom field list is %p", fruinfo.fru.board.cust);
-			debug(3, "Board date is specified? = %d", fruinfo.has_bdate);
-			debug(3, "Board date use unspec? = %d", no_curr_date);
-			if (!fruinfo.has_bdate && no_curr_date) {
-				debug(1, "Using 'unspecified' board mfg. date");
-				fruinfo.fru.board.tv = (struct timeval){0};
-			}
-
-			bi = fru_encode_board_info(&fruinfo.fru.board);
-			e = errno;
-			free_reclist(fruinfo.fru.board.cust);
-
-			if (bi)
-				areas[FRU_BOARD_INFO].data = bi;
-			else {
-				errno = e;
-				fatal("Error allocating a board info area: %m");
-			}
-		}
-
-		if (fruinfo.has_product) {
-			int e;
-			fru_product_area_t *pi = NULL;
-			debug(1, "FRU file will have a product information area");
-			debug(3, "Product information area's custom field list is %p", fruinfo.fru.product.cust);
-			pi = fru_encode_product_info(&fruinfo.fru.product);
-
-			e = errno;
-			free_reclist(fruinfo.fru.product.cust);
-
-			if (pi)
-				areas[FRU_PRODUCT_INFO].data = pi;
-			else {
-				errno = e;
-				fatal("Error allocating a product info area: %m");
-			}
-		}
-
-		if (fruinfo.has_multirec) {
-			int e;
-			fru_mr_area_t *mr = NULL;
-			size_t totalbytes = 0;
-			debug(1, "FRU file will have a multirecord area");
-			debug(3, "Multirecord area record list is %p", fruinfo.fru.mr_reclist);
-			mr = fru_encode_mr_area(fruinfo.fru.mr_reclist, &totalbytes);
-
-			e = errno;
-			free_reclist(fruinfo.fru.mr_reclist);
-
-			if (mr) {
-				areas[FRU_MULTIRECORD].data = mr;
-				areas[FRU_MULTIRECORD].blocks = FRU_BLOCKS(totalbytes);
-
-				debug_dump(3, mr, totalbytes, "Multirecord data:");
-			}
-			else {
-				errno = e;
-				fatal("Error allocating a multirecord area: %m");
-			}
-		}
-
-		fru = fru_create(areas, &size);
-		if (!fru) {
-			fatal("Error allocating a FRU file buffer: %m");
-		}
-
-		debug(1, "Writing %lu bytes of FRU data", (long unsigned int)FRU_BYTES(size));
-
-		fd = open(fname,
-#if __WIN32__ || __WIN64__
-		          O_CREAT | O_TRUNC | O_WRONLY | O_BINARY,
-#else
-		          O_CREAT | O_TRUNC | O_WRONLY,
-#endif
-		          0644);
-
-		if (fd < 0)
-			fatal("Couldn't create file %s: %m", fname);
-
-		if (0 > write(fd, fru, FRU_BYTES(size)))
-			fatal("Couldn't write to %s: %m", fname);
-
-		free(fru);
-		close(fd);
 	}
 }
