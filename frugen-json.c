@@ -48,7 +48,7 @@ json_object_to_fd(int fd, struct json_object *obj, int flags)
 static
 bool json_fill_fru_area_fields(json_object *jso, int count,
                                const char *fieldnames[],
-                               typed_field_t *fields[])
+                               decoded_field_t *fields[])
 {
 	int i;
 	json_object *jsfield;
@@ -483,7 +483,7 @@ void load_from_json_file(const char *fname, struct frugen_fruinfo_s *info)
 			continue;
 		} else if (!strcmp(iter.key, "chassis")) {
 			const char *fieldname[] = { "pn", "serial" };
-			typed_field_t* field[] = {
+			decoded_field_t* field[] = {
 				&info->fru.chassis.pn, &info->fru.chassis.serial
 			};
 			json_object_object_get_ex(jso, "type", &jsfield);
@@ -503,7 +503,7 @@ void load_from_json_file(const char *fname, struct frugen_fruinfo_s *info)
 			const char *fieldname[] = {
 				"mfg", "pname", "pn", "serial", "file"
 			};
-			typed_field_t *field[] = {
+			decoded_field_t *field[] = {
 				&info->fru.board.mfg,
 				&info->fru.board.pname,
 				&info->fru.board.pn,
@@ -537,7 +537,7 @@ void load_from_json_file(const char *fname, struct frugen_fruinfo_s *info)
 			const char *fieldname[] = {
 				"mfg", "pname", "pn", "ver", "serial", "atag", "file"
 			};
-			typed_field_t *field[] = {
+			decoded_field_t *field[] = {
 				&info->fru.product.mfg,
 				&info->fru.product.pname,
 				&info->fru.product.pn,

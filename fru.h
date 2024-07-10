@@ -204,7 +204,7 @@ typedef struct fru_field_s {
  * fields are linked.
  */
 typedef struct fru_reclist_s {
-	fru_field_t *rec; /**< A pointer to the field or NULL if not initialized */
+	decoded_field_t *rec; /**< A pointer to the field or NULL if not initialized */
 	struct fru_reclist_s *next; /**< The next record in the list or NULL if last */
 } fru_reclist_t;
 
@@ -330,7 +330,7 @@ typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
 #define __TYPE_TEXT           0x03
 
 /** FRU field type. Any of BINARY, BCDPLUS, ASCII_6BIT or TEXT. */
-#define FRU_MAKETYPE(x)        (__TYPE_##x << __TYPE_BITS_SHIFT)
+#define FRU_MAKETYPE(x)       (__TYPE_##x << __TYPE_BITS_SHIFT)
 #define FRU_FIELDDATALEN(x)   (size_t)(((x) & ~__TYPE_BITS_MASK))
 #define FRU_FIELDMAXLEN       FRU_FIELDDATALEN(UINT8_MAX) // For FRU fields
 #define FRU_FIELDMAXARRAY     (FRU_FIELDMAXLEN + 1) // For C array allocation
@@ -371,35 +371,35 @@ extern const char* enc_names[TOTAL_FIELD_TYPES];
 typedef struct {
 	field_type_t type;
 	unsigned char val[FRU_FIELDMAXARRAY];
-} typed_field_t;
+} decoded_field_t;
 
 typedef struct {
 	uint8_t type;
-	typed_field_t pn;
-	typed_field_t serial;
+	decoded_field_t pn;
+	decoded_field_t serial;
 	fru_reclist_t *cust;
 } fru_exploded_chassis_t;
 
 typedef struct {
 	uint8_t lang;
 	struct timeval tv;
-	typed_field_t mfg;
-	typed_field_t pname;
-	typed_field_t serial;
-	typed_field_t pn;
-	typed_field_t file;
+	decoded_field_t mfg;
+	decoded_field_t pname;
+	decoded_field_t serial;
+	decoded_field_t pn;
+	decoded_field_t file;
 	fru_reclist_t *cust;
 } fru_exploded_board_t;
 
 typedef struct {
 	uint8_t lang;
-	typed_field_t mfg;
-	typed_field_t pname;
-	typed_field_t pn;
-	typed_field_t ver;
-	typed_field_t serial;
-	typed_field_t atag;
-	typed_field_t file;
+	decoded_field_t mfg;
+	decoded_field_t pname;
+	decoded_field_t pn;
+	decoded_field_t ver;
+	decoded_field_t serial;
+	decoded_field_t atag;
+	decoded_field_t file;
 	fru_reclist_t *cust;
 } fru_exploded_product_t;
 
@@ -724,6 +724,6 @@ bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
  * @retval true Success.
  * @retval false Failure.
  */
-bool fru_decode_data(fru_field_t *field, typed_field_t *out, size_t out_len);
+bool fru_decode_data(fru_field_t *field, decoded_field_t *out, size_t out_len);
 
 #endif // __FRULIB_FRU_H__

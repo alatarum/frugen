@@ -539,7 +539,7 @@ fru_field_t * fru_encode_data(int len, const uint8_t *data)
 }
 
 bool fru_decode_data(fru_field_t *field,
-                     typed_field_t *out,
+                     decoded_field_t *out,
                      size_t out_len)
 {
 	if (!field) return false;
@@ -635,7 +635,7 @@ fru_info_area_t *fru_create_info_area(fru_area_type_t atype,
                                       const struct timeval *tv,
                                       fru_reclist_t *fields,
                                       size_t nstrings,
-                                      const typed_field_t strings[])
+                                      const decoded_field_t strings[])
 {
 	int field_count;
 	size_t padding_size;
@@ -921,7 +921,7 @@ fru_chassis_area_t * fru_encode_chassis_info(const fru_exploded_chassis_t *chass
 		[FRU_CHASSIS_SERIAL] = { NULL, chassis->cust },
 	};
 
-	const typed_field_t strings[] = { chassis->pn, chassis->serial };
+	const decoded_field_t strings[] = { chassis->pn, chassis->serial };
 	fru_chassis_area_t *out = NULL;
 
 	if (!SMBIOS_CHASSIS_IS_VALID(chassis->type)) {
@@ -1002,7 +1002,7 @@ fru_board_area_t * fru_encode_board_info(const fru_exploded_board_t *board)
 		[FRU_BOARD_FILE]     = { NULL, board->cust },
 	};
 
-	const typed_field_t strings[] = {
+	const decoded_field_t strings[] = {
 		board->mfg,
 		board->pname,
 		board->serial,
@@ -1121,7 +1121,7 @@ fru_product_area_t * fru_encode_product_info(const fru_exploded_product_t *produ
 		[FRU_PROD_FILE]    = { NULL, product->cust },
 	};
 
-	const typed_field_t strings[] = {
+	const decoded_field_t strings[] = {
 		product->mfg, product->pname,
 		product->pn, product->ver,
 		product->serial, product->atag,
