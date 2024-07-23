@@ -34,8 +34,11 @@
 #undef DEBUG
 #include <stdio.h>
 #define DEBUG(f, args...) do { \
+	typeof(errno) err = errno; \
 	printf("%s:%d: ", __func__, __LINE__); \
+	errno = err; /* Allow 'f' to use "%m" */ \
 	printf(f,##args); \
+	errno = err; \
 } while(0)
 #else
 #define DEBUG(f, args...)
