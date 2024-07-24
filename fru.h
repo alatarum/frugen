@@ -332,8 +332,8 @@ typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
 /** FRU field type. Any of BINARY, BCDPLUS, ASCII_6BIT or TEXT. */
 #define FRU_MAKETYPE(x)       (__TYPE_##x << __TYPE_BITS_SHIFT)
 #define FRU_FIELDDATALEN(x)   (size_t)(((x) & ~__TYPE_BITS_MASK))
-#define FRU_FIELDMAXLEN       FRU_FIELDDATALEN(UINT8_MAX) // For FRU fields
-#define FRU_FIELDMAXARRAY     (FRU_FIELDMAXLEN + 1) // For C array allocation
+#define FRU_FIELDMAXLEN       FRU_FIELDDATALEN(UINT8_MAX) /// For FRU fields
+#define FRU_FIELDMAXARRAY     ((2 * FRU_FIELDMAXLEN) + 1) /// For C array allocation, BCD+ decoded data is twice the length of encoded
 #define FRU_FIELDSIZE(typelen) (FRU_FIELDDATALEN(typelen) + sizeof(fru_field_t))
 #define FRU_TYPELEN(t, l)     (FRU_MAKETYPE(t) | FRU_FIELDDATALEN(l))
 #define FRU_TYPE(t)           (((t) & __TYPE_BITS_MASK) >> __TYPE_BITS_SHIFT)
