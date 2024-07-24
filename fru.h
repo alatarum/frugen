@@ -1,13 +1,13 @@
-/** @file
+/*
  *  @brief Header for FRU information helper functions
  *
- *  Copyright (C) 2016-2021 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *  Copyright (C) 2016-2024 Alexander Amelkin <alexander@amelkin.msk.ru>
  *  SPDX-License-Identifier: LGPL-2.0-or-later OR Apache-2.0
  */
 
-#ifndef __FRULIB_FRU_H__
-#define __FRULIB_FRU_H__
+#pragma once
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -55,7 +55,8 @@ typedef enum fru_area_type_e {
 
 typedef enum {
 	FRU_CHASSIS_PARTNO,
-	FRU_CHASSIS_SERIAL
+	FRU_CHASSIS_SERIAL,
+	FRU_CHASSIS_FIELD_COUNT
 } fru_chassis_field_t;
 
 typedef enum {
@@ -63,7 +64,8 @@ typedef enum {
 	FRU_BOARD_PRODNAME,
 	FRU_BOARD_SERIAL,
 	FRU_BOARD_PARTNO,
-	FRU_BOARD_FILE
+	FRU_BOARD_FILE,
+	FRU_BOARD_FIELD_COUNT
 } fru_board_field_t;
 
 typedef enum {
@@ -73,7 +75,8 @@ typedef enum {
 	FRU_PROD_VERSION,
 	FRU_PROD_SERIAL,
 	FRU_PROD_ASSET,
-	FRU_PROD_FILE
+	FRU_PROD_FILE,
+	FRU_PROD_FIELD_COUNT
 } fru_prod_field_t;
 
 /// Table 16-2, MultiRecord Area Record Types
@@ -184,66 +187,6 @@ typedef struct fru_area_s {
 	void * data; /**< Pointer to the actual FRU area data */
 } fru_area_t;
 
-/**
- * Generic FRU area field header structure.
- *
- * Every field in chassis, board and product information areas has such a header.
- */
-typedef struct fru_field_s {
-	uint8_t typelen;   /**< Type/length of the field */
-	uint8_t data[];    /**< The field data */
-} fru_field_t;
-
-
-/**
- * A single-linked list of FRU area fields.
- *
- * This is used to describe any length chains of fields.
- * Mandatory fields are linked first in the order they appear
- * in the information area (as per Specification), then custom
- * fields are linked.
- */
-typedef struct fru_reclist_s {
-	decoded_field_t *rec; /**< A pointer to the field or NULL if not initialized */
-	struct fru_reclist_s *next; /**< The next record in the list or NULL if last */
-} fru_reclist_t;
-
-/**
- * Allocate a new reclist entry and add it to \a reclist,
- * set \a reclist to point to the newly allocated entry if
- * \a reclist was NULL.
- *
- * @returns Pointer to the added entry
- */
-static inline fru_reclist_t *add_reclist(fru_reclist_t **reclist)
-{
-	fru_reclist_t *rec;
-	fru_reclist_t *reclist_ptr = *reclist;
-	rec = calloc(1, sizeof(*rec));
-	if(!rec) return NULL;
-
-	// If the reclist is empty, update it
-	if(!reclist_ptr) {
-		*reclist = rec;
-	} else {
-		// If the reclist is not empty, find the last entry and append the new one as next
-		while(reclist_ptr->next)
-			reclist_ptr = reclist_ptr->next;
-
-		reclist_ptr->next = rec;
-	}
-
-	return rec;
-}
-
-/// Works both for fru_reclist_t* and for fru_mr_reclist_t*
-#define free_reclist(recp) while(recp) { \
-	typeof((recp)->next) next = (recp)->next; \
-	free((recp)->rec); \
-	free(recp); \
-	recp = next; \
-}
-
 #define FRU_VER_1    1
 #define FRU_MINIMUM_AREA_HEADER \
 	uint8_t ver;  /**< Area format version, only lower 4 bits */
@@ -255,18 +198,17 @@ static inline fru_reclist_t *add_reclist(fru_reclist_t **reclist)
 
 #define LANG_DEFAULT 0
 #define LANG_ENGLISH 25
-#define FRU_TYPE_EOF 0xc1
 
 typedef struct fru_info_area_s { // The generic info area structure
 	FRU_INFO_AREA_HEADER;
-	uint8_t data[];
+	char data[];
 } fru_info_area_t;
 
 #define FRU_INFO_AREA_HEADER_SZ sizeof(fru_info_area_t)
 
 typedef struct fru_internal_use_area_s {
 	FRU_MINIMUM_AREA_HEADER;
-	uint8_t data[];
+	char data[];
 } fru_internal_use_area_t;
 
 typedef fru_info_area_t fru_chassis_area_t;
@@ -274,7 +216,7 @@ typedef fru_info_area_t fru_chassis_area_t;
 typedef struct fru_board_area_s {
 	FRU_INFO_AREA_HEADER;
 	uint8_t mfgdate[3]; ///< Manufacturing date/time in minutes since 1996/1/1 0:00
-	uint8_t data[];     ///< Variable size (multiple of 8 bytes) data with tail padding and checksum
+	char data[];     ///< Variable size (multiple of 8 bytes) data with tail padding and checksum
 } fru_board_area_t;
 
 typedef fru_info_area_t fru_product_area_t;
@@ -354,24 +296,109 @@ typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
 #define FRU_BLOCKS(bytes)  (((bytes) + FRU_BLOCK_SZ - 1) / FRU_BLOCK_SZ)
 
 typedef enum {
-    FIELD_TYPE_AUTO,
+    FIELD_TYPE_TERMINATOR = -4,
+    FIELD_TYPE_UNKNOWN = -3,
+    FIELD_TYPE_NONPRINTABLE = -2,
+    FIELD_TYPE_TOOLONG = -1,
+    FIELD_TYPE_AUTO = 0,
+    FIELD_TYPE_EMPTY = FIELD_TYPE_AUTO,
     FIELD_TYPE_BINARY = (__TYPE_BINARY + 1),
     BASE_FIELD_TYPE = FIELD_TYPE_BINARY,
     FIELD_TYPE_BCDPLUS = (__TYPE_BCDPLUS + 1),
-    FIELD_TYPE_SIXBITASCII = (__TYPE_ASCII_6BIT + 1),
+    FIELD_TYPE_6BITASCII = (__TYPE_ASCII_6BIT + 1),
     FIELD_TYPE_TEXT = (__TYPE_TEXT + 1),
     TOTAL_FIELD_TYPES
 } field_type_t;
 
-extern const char* enc_names[TOTAL_FIELD_TYPES];
+const char * fru_enc_name_by_type(field_type_t type);
+field_type_t fru_enc_type_by_name(const char *name);
 
 /// Extract FRU field type as field_type_t
 #define FIELD_TYPE_T(t) (FRU_TYPE(t) + BASE_FIELD_TYPE)
 
+/**
+ * A generic input (decoded) field structure containing
+ * the field encoding type and the input data as a string.
+ */
 typedef struct {
 	field_type_t type;
-	unsigned char val[FRU_FIELDMAXARRAY];
+	char val[FRU_FIELDMAXARRAY];
 } decoded_field_t;
+
+/**
+ * A generic FRU area encoded field header structure.
+ *
+ * Every field in chassis, board and product information areas has such a header.
+ */
+typedef struct fru_field_s {
+	uint8_t typelen;   /**< Type/length of the field */
+	uint8_t data[];    /**< The field data */
+} fru_field_t;
+
+/**
+ * A single-linked list of decoded FRU area fields.
+ *
+ * This is used to describe any length chains of fields.
+ * Mandatory fields are linked first in the order they appear
+ * in the information area (as per Specification), then custom
+ * fields are linked.
+ */
+typedef struct fru_reclist_s {
+	decoded_field_t *rec; /**< A pointer to the field or NULL if not initialized */
+	struct fru_reclist_s *next; /**< The next record in the list or NULL if last */
+} fru_reclist_t;
+
+/**
+ * Allocate a new reclist entry and add it to \a reclist,
+ * set \a reclist to point to the newly allocated entry if
+ * \a reclist was NULL.
+ *
+ * @returns Pointer to the added entry
+ */
+static inline void *add_generic_reclist(void *genlist_ptr, size_t rec_size)
+{
+	/**
+	 * A generic single-linked list abstraction.
+	 * This is used as a substitute for all other list types in the library.
+	 */
+	struct genlist_s {
+		void *rec; /* A pointer to the field or NULL if not initialized */
+		void *next; /* The next record in the list or NULL if last */
+	} *rec, **reclist = genlist_ptr, *reclist_ptr = *reclist;
+
+	if (!genlist_ptr) {
+		errno = EFAULT;
+		return NULL;
+	}
+
+	rec = calloc(1, rec_size);
+	if(!rec) return NULL;
+
+	// If the reclist is empty, update it
+	if(!(*reclist)) {
+		*reclist = rec;
+	} else {
+		// If the reclist is not empty, find the last entry and append the new one as next
+		while(reclist_ptr->next)
+			reclist_ptr = reclist_ptr->next;
+
+		reclist_ptr->next = rec;
+	}
+
+	return rec;
+}
+
+/// A wrapper around add_generic_reclist() to work with fru_reclist_t** and fru_mr_reclist_t**
+#define add_reclist(reclist) \
+	add_generic_reclist((reclist), sizeof(*(*reclist)->rec))
+
+/// Works for any list (fru_generic_reclist_t*, fru_reclist_t*, fru_mr_reclist_t*)
+#define free_reclist(recp) while(recp) { \
+	typeof((recp)->next) next = (recp)->next; \
+	free((recp)->rec); \
+	free(recp); \
+	recp = next; \
+}
 
 typedef struct {
 	uint8_t type;
@@ -404,7 +431,7 @@ typedef struct {
 } fru_exploded_product_t;
 
 typedef struct {
-	uint8_t *internal_use;
+	char *internal_use; /// In exploded view this is a hex string
 	fru_exploded_chassis_t chassis;
 	fru_exploded_board_t board;
 	fru_exploded_product_t product;
@@ -419,10 +446,9 @@ fru_chassis_area_t * fru_chassis_info(const fru_exploded_chassis_t *chassis);
 fru_board_area_t * fru_board_info(const fru_exploded_board_t *board);
 fru_product_area_t * fru_product_info(const fru_exploded_product_t *product);
 
-
 /**
  * Take an input string and pack it into an "exploded" multirecord
- * area "mmanagement access" record in binary form, using the
+ * area "management access" record in binary form, using the
  * provided subtype.
  *
  * As per IPMI FRU specifiation section 18.4, no validity checks
@@ -431,13 +457,13 @@ fru_product_area_t * fru_product_info(const fru_exploded_product_t *product);
  *
  * @returns An errno-like negative error code
  * @retval 0        Success
- * @retval -EINVAL  Invalid UUID string (wrong length, wrong symbols)
+ * @retval -EINVAL  Invalid string (wrong length, wrong symbols)
  * @retval -EFAULT  Invalid pointer
  * @retval >0       any errno that calloc() is allowed to set
  */
 int fru_mr_mgmt_str2rec(fru_mr_rec_t **rec,
-                        const unsigned char *str,
-                        fru_mr_mgmt_type_t subtype);
+                        const char *str,
+                        fru_mr_mgmt_type_t type);
 
 /**
  * Take an input string, check that it looks like UUID, and pack it into
@@ -449,7 +475,7 @@ int fru_mr_mgmt_str2rec(fru_mr_rec_t **rec,
  * @retval -EFAULT  Invalid pointer
  * @retval >0       any errno that calloc() is allowed to set
  */
-int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str);
+int fru_mr_uuid2rec(fru_mr_rec_t **rec, const char *str);
 
 /**
  * Take an "exploded" multirecord area record in binary form and convert
@@ -487,8 +513,6 @@ int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *rec, fru_flags_t flags);
 int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
                         fru_flags_t flags);
 
-fru_mr_reclist_t * add_mr_reclist(fru_mr_reclist_t **reclist);
-
 /**
  * Allocate and build an Internal Use Area block.
  *
@@ -516,7 +540,7 @@ fru_internal_use_area_t *fru_encode_internal_use_area(const void *data, uint8_t 
  * @return Encoded area buffer.
  * @retval NULL Encoding failed. \p errno is set accordingly.
  */
-fru_chassis_area_t * fru_encode_chassis_info(const fru_exploded_chassis_t *chassis);
+fru_chassis_area_t * fru_encode_chassis_info(fru_exploded_chassis_t *chassis);
 
 /**
  * @brief Encode board info into binary buffer.
@@ -527,7 +551,7 @@ fru_chassis_area_t * fru_encode_chassis_info(const fru_exploded_chassis_t *chass
  * @return Encoded area buffer.
  * @retval NULL Encoding failed. \p errno is set accordingly.
  */
-fru_board_area_t * fru_encode_board_info(const fru_exploded_board_t *board);
+fru_board_area_t * fru_encode_board_info(fru_exploded_board_t *board);
 
 /**
  * @brief Encode product info into binary buffer.
@@ -538,7 +562,7 @@ fru_board_area_t * fru_encode_board_info(const fru_exploded_board_t *board);
  * @return Encoded area buffer.
  * @retval NULL Encoding failed. \p errno is set accordingly.
  */
-fru_product_area_t * fru_encode_product_info(const fru_exploded_product_t *product);
+fru_product_area_t * fru_encode_product_info(fru_exploded_product_t *product);
 
 /**
  * Allocate and build a MultiRecord area block.
@@ -561,18 +585,6 @@ fru_product_area_t * fru_encode_product_info(const fru_exploded_product_t *produ
  *
  */
 fru_mr_area_t * fru_encode_mr_area(fru_mr_reclist_t *reclist, size_t *total);
-
-/**
- * @brief Encode data field.
- *
- * Binary buffer needs to be freed after use.
- *
- * @param[in] len Binary buffer length.
- * @param[in] data Binary buffer.
- * @return Encoded field buffer.
- * @retval NULL Encoding error. \p errno is set accordingly.
- */
-fru_field_t * fru_encode_data(int len, const uint8_t *data);
 
 fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size);
 
@@ -708,8 +720,8 @@ int fru_decode_mr_area(const fru_mr_area_t *area,
  */
 bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
                                   size_t area_len,
-                                  uint8_t **out,
-                                  fru_flags_t flags);
+                                  char **out,
+                                  fru_flags_t flags __attribute__((unused)));
 
 
 /**
@@ -720,10 +732,7 @@ bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
  *
  * @param[in] field Encoded data field.
  * @param[out] out Decoded field.
- * @param[in] out_len Size of the decoded field region.
  * @retval true Success.
  * @retval false Failure.
  */
-bool fru_decode_data(fru_field_t *field, decoded_field_t *out, size_t out_len);
-
-#endif // __FRULIB_FRU_H__
+bool fru_decode_data(fru_field_t *field, decoded_field_t *out);

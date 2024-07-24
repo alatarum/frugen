@@ -53,7 +53,11 @@ So far supported in libfru:
 
 _NOT supported:_
 
-  * Miltirecord area record types/subtypes other than listed above
+  * Miltirecord area record types/subtypes other than listed above.
+    NOTE: The unsupported MR record types/subtypes can not be decoded
+          or encoded, but they are still found as raw records and
+          can be used to build a FRU file if both input and output
+          formats are binary rather than json.
 
 ## frugen
 
@@ -80,6 +84,18 @@ The limitations:
     the template file OR in the command line. The command line does
     NOT override the template file in that regard, but creates an additional
     UUID or custom record, which may be undesirable
+
+_NOTE:_ You may use `frugen` to modify some standard fields even on FRU files that
+        contain unsupported multirecord area records if you use binary input and
+        binary output formats. Those fields will be copied as is from the source to the
+        destination file.
+
+_NOTE:_ You may use `frugen` to fix area and record checksums in your FRU file.
+        For that purpose use binary input and output formats, and specify the debug (`-g`)
+        flags to ingnore the errors in your source FRU file. The checksums for the
+        destination FRU file will be recalculated properly according to the specification.
+        Please note that FRU files with bad header checksum will not be processed as
+        there is no debug flag to ignore that error.
 
 For the most up-to-date information on the frugen tool invocation and options, please
 use `frugen -h`, below is an example of the output of that command:

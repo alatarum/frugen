@@ -103,36 +103,6 @@ void fhexdump(FILE *fp, const char *prefix, const void *data, size_t len)
 	if (level <= debug_level) fhexdump(stderr, "DEBUG: ", data, len); \
 } while(0)
 
-/**
- * Convert 2 bytes of hex string into a binary byte
- */
-static
-int16_t hex2byte(const char *hex) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Woverride-init"
-	// First initialize the array with all FFs,
-	// then override the values for the bytes that
-	// are valid hexadecimal digits
-	static const int8_t hextable[256] = {
-		[0 ... 255] = -1,
-		['0'] = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-		['A'] = 10, 11, 12, 13, 14, 15,
-		['a'] = 10, 11, 12, 13, 14, 15
-	};
-#pragma GCC diagnostic pop
-
-	if (!hex) return -1;
-
-	int16_t hi = hextable[(off_t)hex[0]];
-	int16_t lo = hextable[(off_t)hex[1]];
-
-	debug(9, "hi = %02" PRIX16 ", lo = %02" PRIX16, hi, lo);
-
-	if (hi < 0 || lo < 0)
-		return -1;
-
-	return ((hi << 4) | lo);
-}
 
 bool datestr_to_tv(const char *datestr, struct timeval *tv)
 {
@@ -165,46 +135,6 @@ bool datestr_to_tv(const char *datestr, struct timeval *tv)
 	tv->tv_sec = time + timezone; // Convert to UTC
 	tv->tv_usec = 0;
 	return true;
-}
-
-static
-uint8_t * fru_encode_binary_string(size_t *len, const char *hexstr)
-{
-	size_t i;
-	uint8_t *buf;
-
-	if (!len) {
-		fatal("BUG: No storage for hex string length provided");
-	}
-
-	*len = strlen(hexstr);
-	debug(3, "The field is marked as binary, length is %zi", *len);
-	if (*len % 2)
-		fatal("Must provide even number of nibbles for binary data");
-	*len /= 2;
-	buf = malloc(*len);
-	if (!buf)
-		fatal("Failed to allocate a buffer for binary data");
-	for (i = 0; i < *len; i++) {
-		int16_t byte = hex2byte(hexstr + 2 * i);
-		debug(4, "[%zd] %c %c => 0x%02" PRIX16,
-		      i, hexstr[2 * i], hexstr[2 * i + 1], byte);
-		if (byte < 0)
-			fatal("Invalid hex data provided for binary attribute");
-		buf[i] = byte;
-	}
-	return buf;
-}
-
-fru_field_t * fru_encode_custom_binary_field(const char *hexstr)
-{
-	size_t len;
-	uint8_t *buf = fru_encode_binary_string(&len, hexstr);
-	fru_field_t *rec;
-	rec = fru_encode_data(len, buf);
-	free(buf);
-
-	return rec;
 }
 
 static struct frugen_config_s config = {
@@ -387,13 +317,17 @@ void save_to_text_file(FILE **fp, const char *fname,
 	if (info->has_chassis) {
 		fputs("Chassis\n", *fp);
 		fprintf(*fp, "\ttype: %u\n", info->fru.chassis.type);
-		fprintf(*fp, "\tpn(%s): %s\n", enc_names[info->fru.chassis.pn.type], info->fru.chassis.pn.val);
-		fprintf(*fp, "\tserial(%s): %s\n", enc_names[info->fru.chassis.serial.type], info->fru.chassis.serial.val);
+		fprintf(*fp, "\tpn(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.chassis.pn.type),
+		             info->fru.chassis.pn.val);
+		fprintf(*fp, "\tserial(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.chassis.serial.type),
+		             info->fru.chassis.serial.val);
 		fru_reclist_t *next = info->fru.chassis.cust;
 		while (next != NULL) {
 			fprintf(*fp, "\tcustom(%s): %s\n",
-				   enc_names[typelen2ind(next->rec->typelen)],
-				   next->rec->data);
+			             fru_enc_name_by_type(next->rec->type),
+			             next->rec->val);
 			next = next->next;
 		}
 	}
@@ -401,18 +335,32 @@ void save_to_text_file(FILE **fp, const char *fname,
 	if (info->has_product) {
 		fputs("Product\n", *fp);
 		fprintf(*fp, "\tlang: %u\n", info->fru.product.lang);
-		fprintf(*fp, "\tmfg(%s): %s\n", enc_names[info->fru.product.mfg.type], info->fru.product.mfg.val);
-		fprintf(*fp, "\tpname(%s): %s\n", enc_names[info->fru.product.pname.type], info->fru.product.pname.val);
-		fprintf(*fp, "\tserial(%s): %s\n", enc_names[info->fru.product.serial.type], info->fru.product.serial.val);
-		fprintf(*fp, "\tpn(%s): %s\n", enc_names[info->fru.product.pn.type], info->fru.product.pn.val);
-		fprintf(*fp, "\tver(%s): %s\n", enc_names[info->fru.product.ver.type], info->fru.product.ver.val);
-		fprintf(*fp, "\tatag(%s): %s\n", enc_names[info->fru.product.atag.type], info->fru.product.atag.val);
-		fprintf(*fp, "\tfile(%s): %s\n", enc_names[info->fru.product.file.type], info->fru.product.file.val);
+		fprintf(*fp, "\tmfg(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.product.mfg.type),
+		             info->fru.product.mfg.val);
+		fprintf(*fp, "\tpname(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.product.pname.type),
+		             info->fru.product.pname.val);
+		fprintf(*fp, "\tserial(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.product.serial.type),
+		             info->fru.product.serial.val);
+		fprintf(*fp, "\tpn(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.product.pn.type),
+		             info->fru.product.pn.val);
+		fprintf(*fp, "\tver(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.product.ver.type),
+		             info->fru.product.ver.val);
+		fprintf(*fp, "\tatag(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.product.atag.type),
+		             info->fru.product.atag.val);
+		fprintf(*fp, "\tfile(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.product.file.type),
+		             info->fru.product.file.val);
 		fru_reclist_t *next = info->fru.product.cust;
 		while (next != NULL) {
 			fprintf(*fp, "\tcustom(%s): %s\n",
-				   enc_names[typelen2ind(next->rec->typelen)],
-				   next->rec->data);
+			             fru_enc_name_by_type(next->rec->type),
+			             next->rec->val);
 			next = next->next;
 		}
 	}
@@ -425,16 +373,26 @@ void save_to_text_file(FILE **fp, const char *fname,
 		fputs("Board\n", *fp);
 		fprintf(*fp, "\tlang: %u\n", info->fru.board.lang);
 		fprintf(*fp, "\tdate: %s\n", timebuf);
-		fprintf(*fp, "\tmfg(%s): %s\n", enc_names[info->fru.board.mfg.type], info->fru.board.mfg.val);
-		fprintf(*fp, "\tpname(%s): %s\n", enc_names[info->fru.board.pname.type], info->fru.board.pname.val);
-		fprintf(*fp, "\tserial(%s): %s\n", enc_names[info->fru.board.serial.type], info->fru.board.serial.val);
-		fprintf(*fp, "\tpn(%s): %s\n", enc_names[info->fru.board.pn.type], info->fru.board.pn.val);
-		fprintf(*fp, "\tfile(%s): %s\n", enc_names[info->fru.board.file.type], info->fru.board.file.val);
+		fprintf(*fp, "\tmfg(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.board.mfg.type),
+		             info->fru.board.mfg.val);
+		fprintf(*fp, "\tpname(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.board.pname.type),
+		             info->fru.board.pname.val);
+		fprintf(*fp, "\tserial(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.board.serial.type),
+		             info->fru.board.serial.val);
+		fprintf(*fp, "\tpn(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.board.pn.type),
+		             info->fru.board.pn.val);
+		fprintf(*fp, "\tfile(%s): %s\n",
+		             fru_enc_name_by_type(info->fru.board.file.type),
+		             info->fru.board.file.val);
 		fru_reclist_t *next = info->fru.board.cust;
 		while (next != NULL) {
 			fprintf(*fp, "\tcustom(%s): %s\n",
-				   enc_names[typelen2ind(next->rec->typelen)],
-				   next->rec->data);
+			             fru_enc_name_by_type(next->rec->type),
+			             next->rec->val);
 			next = next->next;
 		}
 	}
@@ -968,7 +926,7 @@ int main(int argc, char *argv[])
 		}
 
 		if (is_mr_record) {
-			fru_mr_reclist_t *mr_reclist_tail = add_mr_reclist(&fruinfo.fru.mr_reclist);
+			fru_mr_reclist_t *mr_reclist_tail = add_reclist(&fruinfo.fru.mr_reclist);
 			if (!mr_reclist_tail) {
 				fatal("Failed to allocate multirecord area list");
 			}
@@ -976,8 +934,7 @@ int main(int argc, char *argv[])
 
 			switch(opt) {
 				case 'U': // UUID
-					errno = fru_mr_uuid2rec(&mr_reclist_tail->rec,
-					                        (uint8_t *)optarg);
+					errno = fru_mr_uuid2rec(&mr_reclist_tail->rec, optarg);
 					if (errno) {
 						fatal("Failed to convert UUID: %m");
 					}
@@ -989,23 +946,28 @@ int main(int argc, char *argv[])
 
 		if (custom) {
 			fru_reclist_t *custptr;
+			decoded_field_t *field = NULL;
 			debug(3, "Adding a custom field from argument [%s]", optarg);
 			custptr = add_reclist(custom);
 
 			if (!custptr)
 				fatal("Failed to allocate a custom record list entry");
 
+			field = calloc(1, sizeof(*field));
+			if (!field) {
+				fatal("Failed to process custom field. Memory allocation or field length problem.");
+			}
+			field->type = FIELD_TYPE_AUTO;
+			/* TODO: Allow all types in command line and use the same code
+			 *       here as for JSON, ditch cust_binary. Use the same function. */
 			if (cust_binary) {
-				custptr->rec = fru_encode_custom_binary_field(optarg);
+				field->type = FIELD_TYPE_BINARY;
 			}
 			else {
 				debug(3, "The custom field will be auto-typed");
-				custptr->rec = fru_encode_data(LEN_AUTO,
-				                               (uint8_t *)optarg);
 			}
-			if (!custptr->rec) {
-				fatal("Failed to encode custom field. Memory allocation or field length problem.");
-			}
+			strncpy(field->val, optarg, FRU_FIELDMAXLEN);
+			custptr->rec = field;
 			cust_binary = false;
 		}
 	} while (opt != -1);

@@ -46,11 +46,12 @@
 
 static bool autodetect = true;
 
-const char* enc_names[TOTAL_FIELD_TYPES] = {
+static
+const char * fru_enc_type_names[TOTAL_FIELD_TYPES] = {
 	[FIELD_TYPE_AUTO] = "auto",
-	[FIELD_TYPE_BINARY] = "binary",
+	[FIELD_TYPE_BINARY] = "binary", /* For input data that is hex string [0-9A-Fa-f] */
 	[FIELD_TYPE_BCDPLUS] = "bcdplus",
-	[FIELD_TYPE_SIXBITASCII] = "6bitascii",
+	[FIELD_TYPE_6BITASCII] = "6bitascii",
 	[FIELD_TYPE_TEXT] = "text"
 };
 
@@ -83,12 +84,6 @@ void fru_set_autodetect(bool enable)
 	autodetect = enable;
 }
 
-static inline
-size_t strulen(const uint8_t *data)
-{
-	return strlen((const char *)data);
-}
-
 /**
  * Get the FRU date/time base in seconds since UNIX Epoch
  *
@@ -114,7 +109,7 @@ time_t fru_datetime_base() {
  * Strip trailing spaces
  */
 static inline
-void cut_tail(uint8_t *s)
+void cut_tail(char *s)
 {
 	int i;
 	for(i = strlen((char *)s) - 1; i >= 0 && ' ' == s[i]; i--) s[i] = 0;
@@ -125,125 +120,153 @@ static inline
 uint8_t fru_field_copy(void *dest, const fru_field_t *fieldp)
 {
 	memcpy(dest, (void *)fieldp, FRU_FIELDSIZE(fieldp->typelen));
+	DEBUG("copied field of type %02x, size %zd (%zd) into %p\n",
+	      FRU_TYPE(fieldp->typelen),
+	      FRU_FIELDDATALEN(fieldp->typelen), FRU_FIELDSIZE(fieldp->typelen),
+	      dest
+	      );
 	return FRU_FIELDSIZE(fieldp->typelen);
 }
 
+static inline
+uint8_t nibble2hex(char n)
+{
+	return (n > 9 ? n - 10 + 'A': n + '0');
+}
+
 /**
- * Detect the most suitable encoding for the string and calculate
- * the length as well
+ * Convert a binary byte into 2 bytes of hex string
+ */
+static
+void byte2hex(void *buf, char byte)
+{
+	uint8_t *str = buf;
+	if (!str) return;
+
+	str[0] = nibble2hex(((byte & 0xf0) >> 4) & 0x0f);
+	str[1] = nibble2hex(byte & 0x0f);
+	str[2] = 0;
+}
+
+/**
+ * Convert 2 bytes of hex string into a binary byte
+ */
+static
+int16_t hex2byte(const char *hex) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverride-init"
+	// First initialize the array with all FFs,
+	// then override the values for the bytes that
+	// are valid hexadecimal digits
+	static const int8_t hextable[256] = {
+		[0 ... 255] = -1,
+		['0'] = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+		['A'] = 10, 11, 12, 13, 14, 15,
+		['a'] = 10, 11, 12, 13, 14, 15
+	};
+#pragma GCC diagnostic pop
+
+	if (!hex) return -1;
+
+	int16_t hi = hextable[(off_t)hex[0]];
+	int16_t lo = hextable[(off_t)hex[1]];
+
+	if (hi < 0 || lo < 0)
+		return -1;
+
+	return ((hi << 4) | lo);
+}
+
+
+/**
+ * Detect the most suitable encoding for the given string
  *
- * @returns A FRU field type/length byte, as per IPMI FRU Storage Definition,
- *          if everything was ok, or an error code.
- * @retval FRU_FIELD_EMPTY The \a data argument was NULL
- * @retval FRU_FIELD_TERMINATOR The data exceeded the maximum length (63 bytes)
+ * @returns A FRU field type if everything was ok, or an error code.
+ * @retval FIELD_TYPE_EMPTY The \a data argument was NULL or the length
+ *         of the data string was zero
+ * @retval FIELD_TYPE_TOOLONG The data exceeded the maximum length (63 bytes)
+ * @retval FIELD_TYPE_NONPRINTABLE The data contains non-printable characters
  *
  */
 static
-uint8_t fru_get_typelen(int len, /**< [in] Length of the data, LEN_AUTO for pure
-                                           text zero-terminated data or one of
-                                           LEN_BCDPLUS, LEN_6BITASCII, LEN_TEXT
-                                           for explicit text type */
-                        const uint8_t *data) /**< [in] The input data */
+field_type_t fru_detect_type(const char *data) /**< [in] The input data */
 {
-	uint8_t typelen = len;
-	int i;
+	size_t len;
+	field_type_t type = FIELD_TYPE_AUTO;
 
 	if (!data)
-		return FRU_FIELD_EMPTY;
+		return FIELD_TYPE_EMPTY;
 
-	if (len < 0) {
-		DEBUG("Forcing string '%s' to ...\n", (char *)data);
-		// Explicit text type
-		switch (len) {
-		case LEN_BCDPLUS:
-			DEBUG("BCDPLUS type\n");
-			return FRU_TYPELEN(BCDPLUS, (strulen(data) + 1) / 2);
-		case LEN_6BITASCII:
-			DEBUG("6BIT ASCII type\n");
-			return FRU_TYPELEN(ASCII_6BIT, FRU_6BIT_LENGTH(strulen(data)));
-		case LEN_TEXT:
-			DEBUG("ASCII type\n");
-			return FRU_TYPELEN(TEXT, strulen(data));
-		default:
-			DEBUG("Nothing... Unknown text type\n");
-			return FRU_FIELD_TERMINATOR;
-		}
-	}
-
+	len = strlen(data);
 	if (!len) {
-		len = strulen(data);
-		if (!len) {
-			return FRU_FIELD_EMPTY;
-		}
+		DEBUG("Data string is empty\n");
+		return FIELD_TYPE_EMPTY;
 	}
 
 	// If the data exceeds the maximum length, return a terminator
-	if ((size_t)len > FRU_FIELDDATALEN(len)) {
+	if (len > FRU_FIELDDATALEN(len)) {
 		DEBUG("Data exceeds maximum length\n");
-		return FRU_FIELD_TERMINATOR;
-	}
-
-	if (typelen) {
-		// They gave us a non-zero length. The data must be binary.
-		// Trust 'em and don't try to optimize.
-		DEBUG("Binary data due to non-zero length\n");
-		return FRU_TYPELEN(BINARY, len);
+		return -1;
 	}
 
 	DEBUG("Guessing type of string '%s'...\n", (char *)data);
 
-	// As we reach this point, we know the data must be text.
-	// We will try to find the encoding that suits best.
 	if (autodetect) {
 		// By default - the most range-restricted text type
-		typelen = FRU_TYPELEN(BCDPLUS, (len + 1) / 2);
+		// On input we treat 'BINARY' as simple BCD (hex string)
+		type = FIELD_TYPE_BINARY;
 
-		DEBUG("Assuming BCD plus data...\n");
+		DEBUG("Assuming binary (hex string) data...\n");
 	}
 	else {
 		DEBUG("Assuming ASCII data...\n");
-		typelen = FRU_TYPELEN(TEXT, len);
+		type = FIELD_TYPE_TEXT;
 	}
 
 	// Go through the data and expand charset as needed
-	for (i = 0; i < len; i++) {
+	for (size_t i = 0; i < len; i++) {
 		if (data[i] < ' '
 		    && data[i] != '\t'
 		    && data[i] != '\r'
 		    && data[i] != '\n')
 		{
-			// They lied! The data is binary!
-			// That's the widest range type.
-			// There is no use in checking any further.
+			// They cheated! The input data is non-printable (binary)! We don't support that!
 			DEBUG("[%#02x] Binary data!\n", data[i]);
-			typelen = FRU_TYPELEN(BINARY, len);
-			break;
+			return -2;
 		}
 
 		if (autodetect) {
-			if (typelen < FRU_MAKETYPE(TEXT) // Do not reduce the range
-			    && (data[i] > '_' || data[i] < ' '))
+			if (type < FIELD_TYPE_BCDPLUS
+			    && !isxdigit(data[i]))
 			{
-				// The data doesn't fit into 6-bit ASCII, expand to simple text.
-				DEBUG("[%c] Data is simple text!\n", data[i]);
-				typelen = FRU_TYPELEN(TEXT, len);
-				continue;
+				// The data doesn't fit into BINARY (hex string), expand to
+				DEBUG("[%c] Data is at least BCD+!\n", data[i]);
+				type = FIELD_TYPE_BCDPLUS;
 			}
 
-			if (typelen < FRU_MAKETYPE(ASCII_6BIT) // Do not reduce the range
+			if (type < FIELD_TYPE_6BITASCII // Do not reduce the range
 			    && !isdigit(data[i])
 			    && data[i] != ' '
 			    && data[i] != '-'
 			    && data[i] != '.')
 			{
 				// The data doesn't fit into BCD plus, expand to
-				DEBUG("[%c] Data is 6-bit ASCII!\n", data[i]);
-				typelen = FRU_TYPELEN(ASCII_6BIT, FRU_6BIT_LENGTH(len));
+				DEBUG("[%c] Data is at least 6-bit ASCII!\n", data[i]);
+				type = FIELD_TYPE_6BITASCII;
+			}
+
+			if (type < FIELD_TYPE_TEXT
+			    && (data[i] > '_' || data[i] < ' '))
+			{
+				// The data doesn't fit into 6-bit ASCII, expand to simple text.
+				DEBUG("[%c] Data is simple text!\n", data[i]);
+				type = FIELD_TYPE_TEXT;
+				continue;
 			}
 		} /* autodetect */
 	}
 
-	return typelen;
+	return type;
 }
 
 /**
@@ -254,13 +277,13 @@ uint8_t fru_get_typelen(int len, /**< [in] Length of the data, LEN_AUTO for pure
  * @returns NULL if there was an error, sets errno accordingly (man malloc)
  */
 static
-fru_field_t *fru_encode_6bit(const unsigned char *s /**< [in] Input string */)
+fru_field_t *fru_encode_6bit(const char *s /**< [in] Input string */)
 {
-	size_t len = strulen(s);
+	size_t len = strlen(s);
 	size_t len6bit = FRU_6BIT_LENGTH(len);
 	size_t i, i6;
 	fru_field_t *out = NULL;
-	size_t outlen = sizeof(fru_field_t) + len6bit + 1; // 1 extra for null-byte
+	size_t outlen = sizeof(fru_field_t) + len6bit;
 
 	if (len6bit > FRU_FIELDDATALEN(len6bit) || !(out = calloc(1, outlen)))
 	{
@@ -302,16 +325,14 @@ fru_field_t *fru_encode_6bit(const unsigned char *s /**< [in] Input string */)
  *
  * @param[in] field Field to decode.
  * @param[out] out Buffer to decode into.
- * @param[in] out_len Length of output buffer.
  * @retval true Success.
  * @retval false Failure.
  */
 static
 bool fru_decode_6bit(const fru_field_t *field,
-		     uint8_t *out,
-		     size_t out_len)
+                     decoded_field_t *out)
 {
-	const unsigned char *s6;
+	const uint8_t *s6;
 	size_t len, len6bit;
 	size_t i, i6;
 
@@ -321,110 +342,285 @@ bool fru_decode_6bit(const fru_field_t *field,
 	s6 = field->data;
 
 	len = FRU_6BIT_FULLLENGTH(len6bit);
-	if (out_len < (len + 1)) {
+	if (sizeof(out->val) < len + 1) /* Need space for nul-byte */
 		return false;
-	}
 
 	for(i = 0, i6 = 0; i6 <= len6bit && i < len && s6[i6]; i++) {
 		int byte = i % 4;
 
-		DEBUG("%d:%zu = ", byte, i6);
+		//DEBUG("%d:%zu = \n", byte, i6);
 
 		switch(byte) {
 			case 0:
-				DEBUG("%02" PRIX8, s6[i6]);
-				out[i] = s6[i6] & 0x3F;
+				//DEBUG("%02" PRIX8 "\n", s6[i6]);
+				out->val[i] = s6[i6] & 0x3F;
 				break;
 			case 1:
-				DEBUG("%02" PRIX8 " %02" PRIX8, s6[i6], s6[i6 + 1]);
-				out[i] = (s6[i6] >> 6) | (s6[i6 + 1] << 2);
+				//DEBUG("%02" PRIX8 " %02" PRIX8 "\n", s6[i6], s6[i6 + 1]);
+				out->val[i] = (s6[i6] >> 6) | (s6[i6 + 1] << 2);
 				++i6;
 				break;
 			case 2:
-				DEBUG("%02" PRIX8 " %02" PRIX8, s6[i6], s6[i6 + 1]);
-				out[i] = (s6[i6] >> 4) | (s6[i6 + 1] << 4);
+				//DEBUG("%02" PRIX8 " %02" PRIX8 "\n", s6[i6], s6[i6 + 1]);
+				out->val[i] = (s6[i6] >> 4) | (s6[i6 + 1] << 4);
 				++i6;
 				break;
 			case 3:
-				DEBUG("%02" PRIX8, s6[i6]);
-				out[i] = s6[i6++] >> 2;
+				//DEBUG("%02" PRIX8 "\n", s6[i6]);
+				out->val[i] = s6[i6++] >> 2;
 				break;
 		}
-		out[i] &= 0x3F;
-		out[i] += ' ';
-		DEBUG("-> %02hhx %c\n", out[i], out[i]);
+		out->val[i] &= 0x3F;
+		out->val[i] += ' ';
+		//DEBUG("-> %02hhx %c\n", out->val[i], out->val[i]);
 	}
 
 	// Strip trailing spaces that could emerge when decoding a
 	// string that was a byte shorter than a multiple of 4.
-	cut_tail(out);
+	cut_tail(out->val);
+	DEBUG("6bit ASCII string of length %zd decoded: '%s'\n", len, out->val);
 
 	return true;
+}
+
+/**
+ * Allocate a buffer and encode the input string into it as BCD+
+ *
+ * @returns pointer to the newly allocated field buffer if allocation and
+ *          encoding were successful
+ * @returns NULL if there was an error, sets errno accordingly (man malloc)
+ *          May set errno to EMSGSIZE if the \a s string exceeds the
+ *          maximum length
+ */
+static
+fru_field_t *fru_encode_bcdplus(const char *s /**< [in] Input string */)
+{
+	size_t len = strlen(s);
+	size_t lenbcd = (len + 1) / 2; /* Need an extra byte for a lone trailing nibble */
+	fru_field_t *out = NULL;
+	size_t outlen = sizeof(fru_field_t) + lenbcd;
+	uint8_t c[2] = { 0 };
+
+	if (lenbcd > FRU_FIELDDATALEN(lenbcd) || !(out = calloc(1, outlen)))
+	{
+		errno = EMSGSIZE;
+		return out;
+	}
+
+	out->typelen = FRU_TYPELEN(BCDPLUS, lenbcd);
+
+	/* Copy the data and pack it as BCD */
+	for (size_t i = 0; i < len; i++) {
+		switch(s[i]) {
+			case 0:
+				// The null-terminator encountered earlier than
+				// the end of the BCD field, encode as space
+			case ' ':
+				c[i % 2] = 0xA;
+				break;
+			case '-':
+				c[i % 2] = 0xB;
+				break;
+			case '.':
+				c[i % 2] = 0xC;
+				break;
+			default: // Digits
+				c[i % 2] = s[i] - '0';
+		}
+		out->data[i / 2] = c[0] << 4 | c[1];
+	}
+
+	return out;
 }
 
 /**
  * @brief Decode BCDPLUS string.
  *
  * @param[in] field Field to decode.
- * @param[out] out Buffer to decode into.
- * @param[in] out_len Length of output buffer.
+ * @param[out] out Pointer to the decoded field structure
  * @retval true Success.
  * @retval false Failure.
  */
 static
 bool fru_decode_bcdplus(const fru_field_t *field,
-                        uint8_t *out,
-                        size_t out_len)
+                        decoded_field_t *out)
 {
 	size_t i;
 	uint8_t c;
-	if (out_len < 2 * FRU_FIELDDATALEN(field->typelen) + 1)
+	size_t len;
+
+	len = 2 * FRU_FIELDDATALEN(field->typelen);
+	if (sizeof(out->val) < len + 1) /* Need space for nul-byte */
 		return false;
+
 	/* Copy the data and pack it as BCD */
-	for (i = 0; i < 2 * FRU_FIELDDATALEN(field->typelen); i++) {
+	for (i = 0; i < len; i++) {
 		c = (field->data[i / 2] >> ((i % 2) ? 0 : 4)) & 0x0F;
 		switch (c) {
 		case 0xA:
-			out[i] = ' ';
+			out->val[i] = ' ';
 			break;
 		case 0xB:
-			out[i] = '-';
+			out->val[i] = '-';
 			break;
 		case 0xC:
-			out[i] = '.';
+			out->val[i] = '.';
 			break;
 		case 0xD:
 		case 0xE:
 		case 0xF:
-			out[i] = '?';
+			out->val[i] = '?';
 			break;
 		default: // Digits
-			out[i] = c + '0';
+			out->val[i] = c + '0';
 		}
 	}
-	out[2 * FRU_FIELDDATALEN(field->typelen)] = 0; // Terminate the string
+	out->val[len] = 0; // Terminate the string
 	// Strip trailing spaces that may have emerged when a string of odd
 	// length was BCD-encoded.
-	cut_tail(out);
+	cut_tail(out->val);
+	DEBUG("BCD+ string of length %zd decoded: '%s'\n", len, out->val);
 
 	return true;
 }
 
-static inline
-uint8_t nibble2hex(uint8_t n)
+/**
+ * Allocate a buffer and encode the input string into it as plain text
+ *
+ * @returns pointer to the newly allocated field buffer if allocation and
+ *          encoding were successful
+ * @returns NULL if there was an error, sets errno accordingly (man malloc)
+ *          May set errno to EMSGSIZE if the \a s string exceeds the
+ *          maximum length
+ */
+static
+fru_field_t *fru_encode_text(const char *s /**< [in] Input string */)
 {
-	return (n > 9 ? n - 10 + 'A': n + '0');
+	size_t len = strlen(s);
+	fru_field_t *out = NULL;
+	// For TEXT encoding length 1 means "end-of-fields"
+	size_t outlen = ((len == 1) ? 2 : len);
+
+	if (len > FRU_FIELDDATALEN(len)
+	    || !(out = calloc(1, sizeof(fru_field_t) + outlen)))
+	{
+		errno = EMSGSIZE;
+		return out;
+	}
+
+	out->typelen = FRU_TYPELEN(TEXT, len);
+	memcpy(out->data, s, len); // We don't want the nul-byte in the destination
+
+	return out;
 }
 
+/**
+ * @brief Copy data from encoded fru_field_t into a plain text buffer
+ *
+ * @param[in] field Field to decode.
+ * @param[out] out Pointer to the decoded field structure
+ * @retval true Success.
+ * @retval false Failure (buffer too short)
+ */
 static
-void byte2hex(void *buf, uint8_t byte)
+bool fru_decode_text(const fru_field_t *field,
+                     decoded_field_t *out)
 {
-	uint8_t *str = buf;
-	if (!str) return;
+	size_t len = FRU_FIELDDATALEN(field->typelen);
+	if (sizeof(out->val) < len + 1) /* Need space for nul-byte */
+		return false;
 
-	str[0] = nibble2hex((byte & 0xf0) >> 4);
-	str[1] = nibble2hex(byte & 0x0f);
-	str[2] = 0;
+	if (len) {
+		memcpy(out->val, field->data, len);
+	}
+	out->val[len] = 0; /* Terminate the string */
+	DEBUG("text string of length %zd decoded: '%s'\n", len, out->val);
+
+	return true;
+}
+
+/*
+ * A helper to endcode a hex string into a byte array
+ */
+static
+uint8_t * fru_encode_binary_string(size_t *len, const char *hexstr)
+{
+	size_t i;
+	uint8_t *buf;
+
+	if (!len) {
+		DEBUG("Storage for hex string length is not provided\n");
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	*len = strlen(hexstr);
+	if (*len % 2) {
+		DEBUG("Must provide even number of nibbles for binary data\n");
+		errno = EILSEQ;
+		return NULL;
+	}
+	*len /= 2;
+	buf = malloc(*len);
+	if (!buf) {
+		DEBUG("Failed to allocate a buffer for binary data\n");
+		return NULL; /* errno from malloc */
+	}
+	for (i = 0; i < *len; i++) {
+		int16_t byte = hex2byte(hexstr + 2 * i);
+		DEBUG("[%zd] %c %c => 0x%02" PRIX16 "\n",
+		      i, hexstr[2 * i], hexstr[2 * i + 1], byte);
+		if (byte < 0) {
+			DEBUG("Invalid hex data provided for binary attribute\n");
+			errno = EINVAL;
+			return NULL;
+		}
+		buf[i] = byte;
+	}
+	return buf;
+}
+
+/**
+ * Allocate a buffer and encode the input string into it as plain text
+ *
+ * @returns pointer to the newly allocated field buffer if allocation and
+ *          encoding were successful
+ * @returns NULL if there was an error, sets errno accordingly (man malloc)
+ *          May set errno to EMSGSIZE if the \a s string exceeds the
+ *          maximum length
+ */
+static
+fru_field_t * fru_encode_binary(const char *hexstr)
+{
+	size_t len;
+	fru_field_t *out = NULL;
+	uint8_t *buf = fru_encode_binary_string(&len, hexstr);
+	if (!buf) {
+		return NULL;
+	}
+
+	if (len > FRU_FIELDDATALEN(len))
+	{
+		DEBUG("Binary data length (%zd) exceeds max (%" PRIu8 ")\n",
+		      len, (uint8_t)~__TYPE_BITS_MASK);
+		free(buf);
+		errno = EMSGSIZE;
+		return NULL;
+	}
+
+	out = calloc(1, sizeof(fru_field_t) + len);
+	if (!out) {
+		typeof(errno) err = errno;
+		free(buf);
+		errno = err;
+		return NULL;
+	}
+
+	out->typelen = FRU_TYPELEN(BINARY, len);
+	memcpy(out->data, buf, len);
+	free(buf);
+
+	return out;
 }
 
 /**
@@ -444,11 +640,11 @@ void byte2hex(void *buf, uint8_t byte)
 static
 bool fru_decode_raw_binary(const void *in,
                            size_t in_len,
-                           uint8_t *out,
+                           char *out,
                            size_t out_len)
 {
 	size_t i;
-	const uint8_t *buffer = in;
+	const char *buffer = in;
 
 	if (in_len * 2 + 1 > out_len)
 		return false;
@@ -465,105 +661,117 @@ bool fru_decode_raw_binary(const void *in,
  * @brief Get a hex string representation of the supplied binary field.
  *
  * @param[in] field Field to decode.
- * @param[out] out Buffer to decode into.
- * @param[in] out_len Length of output buffer.
+ * @param[out] out Pointer to the decoded field structure
  * @retval true Success.
  * @retval false Failure.
  */
 static
 bool fru_decode_binary(const fru_field_t *field,
-                       uint8_t *out,
-                       size_t out_len)
+                       decoded_field_t *out)
 {
 	return fru_decode_raw_binary(field->data,
 	                             FRU_FIELDDATALEN(field->typelen),
-	                             out,
-	                             out_len);
+	                             out->val,
+	                             sizeof(out->val));
 }
 
 /**
  * @brief Allocate a buffer and encode that data as per FRU specification
  *
- * @param[in] len Buffer length.
- * @param[in] data Binary buffer.
- * @param[in] out_len Length of output buffer.
- * @retval NULL Failure.
+ * @param[in] field Pointer to the input (decoded) field structure
+ * @retval NULL Failure, errno is set to the reason
  * @return Encoded field.
  */
-fru_field_t * fru_encode_data(int len, const uint8_t *data)
+static
+fru_field_t * fru_encode_data(decoded_field_t *field)
 {
-	int typelen;
+	size_t len = strlen(field->val);
+	field_type_t realtype;
 	fru_field_t *out;
+	fru_field_t * (*encode[TOTAL_FIELD_TYPES])(const char *) = {
+		[FIELD_TYPE_BINARY] = fru_encode_binary,
+		[FIELD_TYPE_BCDPLUS] = fru_encode_bcdplus,
+		[FIELD_TYPE_6BITASCII] = fru_encode_6bit,
+		[FIELD_TYPE_TEXT] = fru_encode_text,
+	};
 
-	typelen = fru_get_typelen(len, data);
-	if (FRU_FIELD_TERMINATOR == typelen)
-		return NULL; // Can't encode this data
-
-	if (FRU_ISTYPE(typelen, ASCII_6BIT)) {
-		out = fru_encode_6bit(data);
-	}
-	else {
-		if (!(out = malloc(FRU_FIELDSIZE(typelen) + 1))) // Extra byte for NUL
-			return NULL;
-
-		out->typelen = typelen;
-		if (FRU_ISTYPE(typelen, BCDPLUS)) {
-			size_t i;
-			uint8_t c[2] = {0};
-
-			/* Copy the data and pack it as BCD */
-			for (i = 0; i < 2 * FRU_FIELDDATALEN(typelen); i++) {
-				switch(data[i]) {
-					case 0:
-						// The null-terminator encountered earlier than
-						// the end of the BCD field, encode as space
-					case ' ':
-						c[i % 2] = 0xA;
-						break;
-					case '-':
-						c[i % 2] = 0xB;
-						break;
-					case '.':
-						c[i % 2] = 0xC;
-						break;
-					default: // Digits
-						c[i % 2] = data[i] - '0';
-				}
-				out->data[i / 2] = c[0] << 4 | c[1];
-			}
-		}
-		else {
-			memcpy(out->data, data, FRU_FIELDDATALEN(typelen));
-		}
-		out->data[FRU_FIELDDATALEN(typelen)] = 0; // Terminate for safety
+	if (field->type < FIELD_TYPE_AUTO || field->type >= TOTAL_FIELD_TYPES) {
+		DEBUG("ERROR: Field encoding type is invalid (%d)\n", field->type);
+		errno = ERANGE;
+		return NULL;
 	}
 
-	return out;
+	DEBUG("The field is marked as '%s', length is %zi\n",
+	      fru_enc_name_by_type(field->type),
+	      len);
+
+	realtype = fru_detect_type(field->val);
+	if (realtype == FIELD_TYPE_TOOLONG) {
+		DEBUG("ERROR: Data in field is too long\n");
+		errno = EMSGSIZE;
+		return NULL;
+	}
+
+	if (realtype == FIELD_TYPE_NONPRINTABLE) {
+		DEBUG("ERROR: Data in field contains non-printable characters\n");
+		errno = EBADMSG;
+		return NULL;
+	}
+
+	if (FIELD_TYPE_AUTO == field->type) {
+		field->type = realtype;
+	}
+	else if (field->type != FIELD_TYPE_BINARY && realtype > field->type) {
+		DEBUG("ERROR: Data in field exceeds the specified type's range\n");
+		errno = ERANGE;
+		return NULL;
+	}
+
+	if (!len || field->type == FIELD_TYPE_EMPTY) {
+		out = calloc(1, sizeof(fru_field_t));
+		out->typelen = FRU_FIELD_EMPTY;
+		return out;
+	}
+
+	DEBUG("The field will be encoded as '%s'\n",
+	      fru_enc_name_by_type(field->type));
+
+	return encode[field->type](field->val);
 }
 
 bool fru_decode_data(fru_field_t *field,
-                     decoded_field_t *out,
-                     size_t out_len)
+                     decoded_field_t *out)
 {
+	field_type_t type;
+	bool (*decode[TOTAL_FIELD_TYPES])(const fru_field_t *,
+	                                  decoded_field_t *) = {
+		[FIELD_TYPE_BINARY] = fru_decode_binary,
+		[FIELD_TYPE_BCDPLUS] = fru_decode_bcdplus,
+		[FIELD_TYPE_6BITASCII] = fru_decode_6bit,
+		[FIELD_TYPE_TEXT] = fru_decode_text,
+	};
+
 	if (!field) return false;
 
-	if (FRU_ISTYPE(field->typelen, ASCII_6BIT)) {
-		out->type = FIELD_TYPE_SIXBITASCII;
-		return fru_decode_6bit(field, out->val, out_len);
-	} else {
-		if (out_len < (FRU_FIELDDATALEN(field->typelen) + 1))
-			return false;
+	type = FIELD_TYPE_T(field->typelen);
 
-		if (FRU_ISTYPE(field->typelen, BCDPLUS)) {
-			out->type = FIELD_TYPE_BCDPLUS;
-			return fru_decode_bcdplus(field, out->val, out_len);
-		} else {
-			out->type = FIELD_TYPE_TEXT;
-			memcpy(out->val, field->data, FRU_FIELDDATALEN(field->typelen));
-			out->val[FRU_FIELDDATALEN(field->typelen)] = 0; // Terminate the string
-			return true;
-		}
+	if (type < FIELD_TYPE_AUTO || type >= TOTAL_FIELD_TYPES) {
+		DEBUG("ERROR: Field encoding type is invalid (%d)\n", type);
+		errno = ERANGE;
+		return false;
 	}
+
+	if (field->typelen != FRU_FIELD_TERMINATOR) {
+		DEBUG("The encoded field is marked as '%s', length is %zi (typelen %02x)\n",
+		      fru_enc_name_by_type(type), FRU_FIELDDATALEN(field->typelen),
+		      field->typelen);
+	}
+	else {
+		DEBUG("End-of-fields reached");
+	}
+
+	out->type = type;
+	return decode[type](field, out);
 }
 
 /**
@@ -625,9 +833,8 @@ int fru_area_checksum(fru_info_area_t *area)
  *                     for areas that use it (board).
  *                     You may safely use NULL for areas that don't require
  *                     the manufacturing time (non-board areas).
- * @param[in] fields   Single-linked list of data fields
- * @param[in] nstrings Number of strings for mandatory fields
- * @param[in] strings  Array of typed strings for mandatory fields
+ * @param[in] fields   Single-linked list of data fields (first mandatory, then custom)
+ *
  * @returns fru_info_area_t *area A newly allocated buffer containing the
  *                                created area
  *
@@ -636,9 +843,7 @@ static
 fru_info_area_t *fru_create_info_area(fru_area_type_t atype,
                                       uint8_t langtype,
                                       const struct timeval *tv,
-                                      fru_reclist_t *fields,
-                                      size_t nstrings,
-                                      const decoded_field_t strings[])
+                                      const fru_reclist_t *fields)
 {
 	int field_count;
 	size_t padding_size;
@@ -649,9 +854,20 @@ fru_info_area_t *fru_create_info_area(fru_area_type_t atype,
 	                                         // header for a generic info area
 	void *out = NULL;
 	uint8_t *outp;
-	fru_reclist_t *field = fields;
-	int totalsize = 2; // A generic info area has a custom fields terminator
-	                   // and a checksum
+	const fru_reclist_t *field = fields;
+
+	/*
+	 * A single-linked list of encoded FRU area fields.
+	 *
+	 * This structure is similar to fru_generic_reclist_t so
+	 * the standard add_reclist() and free_reclist() can be used
+	 * on it.
+	 */
+	struct fru_encoded_reclist_s {
+		fru_field_t *rec; /* A pointer to the field or NULL if not initialized */
+		struct fru_encoded_reclist_s *next; /* The next record in the list or NULL if last */
+	} *encoded_fields = NULL;
+	int totalsize = 0;
 
 	if (!FRU_AREA_IS_GENERIC(atype)) {
 		// This function doesn't support multirecord or internal use areas
@@ -691,161 +907,107 @@ fru_info_area_t *fru_create_info_area(fru_area_type_t atype,
 
 	totalsize += headerlen;
 
-	/* Find uninitialized mandatory fields, allocate and initialize them with
-	 * provided strings */
-	for (field_count = 0, field = fields;
-	     field && !field->rec && (size_t)field_count < nstrings;
-	     field = field->next, field_count++)
-	{
-		int len = LEN_AUTO;
-		switch (strings[field_count].type) {
-			case FIELD_TYPE_BINARY: {
-				DEBUG("binary format not yet implemented\n");
-				errno = EINVAL;
-				goto err;
-			}
-			case FIELD_TYPE_BCDPLUS: {
-				len = LEN_BCDPLUS;
-				break;
-			}
-			case FIELD_TYPE_SIXBITASCII: {
-				len = LEN_6BITASCII;
-				break;
-			}
-			case FIELD_TYPE_TEXT: {
-				len = LEN_TEXT;
-				break;
-			}
-			default:
-				len = LEN_AUTO;
-				break;
+	/* Encode the input fields */
+	struct fru_encoded_reclist_s *encoded_recptr;
+	for (field_count = 0, field = fields; field; field = field->next, field_count++) {
+		/* Allocate a new entry for the list of encoded fields */
+		encoded_recptr = add_reclist(&encoded_fields);
+		if (!encoded_recptr) {
+			errno = ENOMEM;
+			goto err_fields;
 		}
-		field->rec = fru_encode_data(len, strings[field_count].val);
-		if (!field->rec) goto err;
-	}
 
-	/* Now calculate the total size of all initialized
-	 * (mandatory and custom) fields */
-	for (field = &fields[0]; field && field->rec; field = field->next) {
-		totalsize += FRU_FIELDSIZE(field->rec->typelen);
+		encoded_recptr->rec = fru_encode_data(field->rec);
+		if (!encoded_recptr->rec) {
+			errno = ENOMEM;
+			goto err_fields;
+		}
+		/* Update the total size of all encoded (mandatory and custom) fields */
+		totalsize += FRU_FIELDSIZE(encoded_recptr->rec->typelen);
 	}
+	totalsize += sizeof(fru_field_t); /* Reserve space for a terminator field */
+	totalsize++; /* Reserve space for the checksum */
 
 	header.blocks = FRU_BLOCKS(totalsize); // Round up to multiple of 8 bytes
 	padding_size = header.blocks * FRU_BLOCK_SZ - totalsize;
+	DEBUG("padding size is %zd (%d - %d) bytes\n", padding_size, header.blocks * FRU_BLOCK_SZ, totalsize);
 
 	// This will be returned, to be freed by the caller
 	out = calloc(1, FRU_BYTES(header.blocks));
 	outp = out;
 
-	if (!out) goto err;
+	if (!out) goto err_fields;
 
 	// Now fill the output buffer. First copy the header.
 	memcpy(outp, &header, headerlen);
 	outp += headerlen;
 
-	DEBUG("area size is %d (%d) bytes\n", totalsize, FRU_BYTES(header.blocks));
+	DEBUG("area size is %d (%d) bytes, header is %zd bytes long\n",
+	      totalsize, FRU_BYTES(header.blocks), (void *)outp - out);
 	DEBUG("area size in header is (%d) bytes\n", FRU_BYTES(((fru_info_area_t *)out)->blocks));
 
-	// Add the data fields
-	for (field = fields; field && field->rec; field = field->next) {
-		outp += fru_field_copy(outp, field->rec);
+	// Copy the data from the encoded field list into the linear output buffer
+	for (struct fru_encoded_reclist_s *encoded_recptr = encoded_fields;
+	     encoded_recptr && encoded_recptr->rec;
+	     encoded_recptr = encoded_recptr->next)
+	{
+		outp += fru_field_copy(outp, encoded_recptr->rec);
 	}
 
 	// Terminate the data fields, add padding and checksum
 	*outp = FRU_FIELD_TERMINATOR;
+	DEBUG("terminator (c1) written at offset %zd\n", (void *)outp - out);
 	outp += 1 + padding_size;
 	*outp = fru_area_checksum(out);
+	DEBUG("checksum (%02x) written at offset %zd\n", *outp, (void *)outp - out);
 
-	DEBUG("area size is %d (%d) bytes\n", totalsize, FRU_BYTES(header.blocks));
-	DEBUG("area size in header is (%d) bytes\n", FRU_BYTES(((fru_info_area_t *)out)->blocks));
-
+err_fields:
+	free_reclist(encoded_fields);
 err:
-	/*
-	 * Free the allocated mandatory fields. Either an error has occured or the
-	 * fields have already been copied into the output buffer. Anyway, they
-	 * aren't needed anymore
-	 */
-	for (--field_count; field_count >= 0; field_count--) {
-		free(fields[field_count].rec);
-	}
 	return out;
 }
 
 static
-bool fru_decode_custom_fields(const uint8_t *data,
+bool fru_decode_custom_fields(const char *data,
                               int bytes,
                               fru_reclist_t **reclist)
 {
-	fru_field_t *field = NULL;
+	fru_field_t *field = NULL; /* A pointer to an _encoded_ field */
 
+	DEBUG("Decoding custom fields in %d bytes\n", bytes);
 	while (bytes > 0) {
 		field = (fru_field_t*)data;
 
 		// end of fields
-		if (field->typelen == FRU_TYPE_EOF)
+		if (field->typelen == FRU_FIELD_TERMINATOR) {
+			DEBUG("End of fields found (bytes left %d)\n", bytes);
 			break;
+		}
 
 		fru_reclist_t *custom_field = add_reclist(reclist);
-		if (custom_field == NULL)
+		if (custom_field == NULL) {
+			DEBUG("Failed to allocate reclist: %m\n");
 			return false;
+		}
 
 		size_t length = FRU_FIELDDATALEN(field->typelen);
-		custom_field->rec = calloc(1, FRU_FIELDMAXARRAY);
-		custom_field->rec->typelen = field->typelen;
-		switch (FRU_TYPE(field->typelen)) {
-			case __TYPE_BINARY:
-				fru_decode_binary(field, custom_field->rec->data, FRU_FIELDMAXLEN);
-				break;
-			case __TYPE_ASCII_6BIT:
-				fru_decode_6bit(field, custom_field->rec->data, FRU_FIELDMAXLEN);
-				break;
-			case __TYPE_BCDPLUS:
-				fru_decode_bcdplus(field, custom_field->rec->data, FRU_FIELDMAXLEN);
-				break;
-			default:
-				memcpy(custom_field->rec->data, field->data, length);
-				custom_field->rec->data[length] = 0; // Terminate the string
-				break;
+		custom_field->rec = calloc(1, sizeof(*(custom_field->rec)));
+		custom_field->rec->type = FIELD_TYPE_T(field->typelen);
+		if (!fru_decode_data(field, custom_field->rec)) {
+			DEBUG("Failed to decode custom field: %m");
+			return false;
 		}
-		data += length + 1;
-		bytes -= length + 1;
+		data += length + sizeof(fru_field_t);
+		bytes -= length + sizeof(fru_field_t);
 	}
 
 	if (bytes <= 0) {
-		DEBUG("area doesn't contain an end-of-fields byte\n");
+		DEBUG("Area doesn't contain an end-of-fields byte\n");
 		return false;
 	}
 
+	DEBUG("Done decoding custom fields\n");
 	return true;
-}
-
-/**
- * Convert 2 bytes of hex string into a binary byte
- */
-static
-int16_t hex2byte(const char *hex) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Woverride-init"
-	// First initialize the array with all FFs,
-	// then override the values for the bytes that
-	// are valid hexadecimal digits
-	static const int8_t hextable[256] = {
-		[0 ... 255] = -1,
-		['0'] = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-		['A'] = 10, 11, 12, 13, 14, 15,
-		['a'] = 10, 11, 12, 13, 14, 15
-	};
-#pragma GCC diagnostic pop
-
-	if (!hex) return -1;
-
-	int16_t hi = hextable[(off_t)hex[0]];
-	int16_t lo = hextable[(off_t)hex[1]];
-
-	if (hi < 0 || lo < 0)
-		return -1;
-
-	return ((hi << 4) | lo);
 }
 
 fru_internal_use_area_t *fru_encode_internal_use_area(const void *data, uint8_t *blocks)
@@ -908,23 +1070,24 @@ out:
  * Don't forget to free() the returned buffer when you don't need it anymore.
  *
  * @param[in] chassis Exploded chassis info area
- * @returns fru_info_area_t *area A newly allocated buffer containing the
+ * @returns fru_info_area_T *area A newly allocated buffer containing the
  * created area
  */
-fru_chassis_area_t * fru_encode_chassis_info(const fru_exploded_chassis_t *chassis)
+fru_chassis_area_t * fru_encode_chassis_info(fru_exploded_chassis_t *chassis)
 {
 	if(!chassis) {
 		errno = EFAULT;
 		return NULL;
 	}
 
-	// List of fields. Mandatory fields are unallocated yet.
+	/*
+	 * List of decoded fields. First mandatory, then custom.
+	 */
 	fru_reclist_t fields[] = {
-		[FRU_CHASSIS_PARTNO] = { NULL, &fields[FRU_CHASSIS_SERIAL] },
-		[FRU_CHASSIS_SERIAL] = { NULL, chassis->cust },
+		[FRU_CHASSIS_PARTNO] = { &chassis->pn, &fields[FRU_CHASSIS_SERIAL] },
+		[FRU_CHASSIS_SERIAL] = { &chassis->serial, chassis->cust },
 	};
 
-	const decoded_field_t strings[] = { chassis->pn, chassis->serial };
 	fru_chassis_area_t *out = NULL;
 
 	if (!SMBIOS_CHASSIS_IS_VALID(chassis->type)) {
@@ -933,40 +1096,124 @@ fru_chassis_area_t * fru_encode_chassis_info(const fru_exploded_chassis_t *chass
 	}
 
 	out = fru_create_info_area(FRU_CHASSIS_INFO,
-	                           chassis->type, NULL, fields,
-	                           ARRAY_SZ(strings), strings);
+	                           chassis->type, NULL, fields);
 
 	return out;
+}
+
+/**
+ * A helper function to perform the actual decoding/explosion of any
+ * generic info area (chassis, board, product).
+
+ * They all have more or less similar layouts that can be accounted
+ * for inside this function given the area type.
+ *
+ * @param[in] atype The area type
+ * @param[in] data_in Pointer to the encoded (source) data buffer
+ * @param[out] data_out Pointer to a fru_exploded_*_t (destination) structure
+ */
+static
+bool fru_decode_area_info(fru_area_type_t atype,
+                          const void *data_in,
+                          void *data_out)
+{
+	const fru_info_area_t *area = data_in;
+	int bytes_left = area->blocks * FRU_BLOCK_SZ; /* All generic areas have this */
+	struct generic_exploded_area_s {
+		uint8_t langtype; /* All fru_exploded_*_t types have this */
+		uint8_t data[];
+	} *area_out = data_out;
+	void *data = NULL;
+	fru_field_t *field;
+	fru_reclist_t **cust;
+	fru_exploded_chassis_t * chassis_out = data_out;
+	fru_exploded_board_t * board_out = data_out;
+	fru_exploded_product_t * product_out = data_out;
+	decoded_field_t * out_field[FRU_MAX_AREAS][FRU_PROD_FIELD_COUNT] = {
+		[FRU_CHASSIS_INFO] = {
+			&chassis_out->pn,
+			&chassis_out->serial,
+		},
+		[FRU_BOARD_INFO] = {
+			&board_out->mfg,
+			&board_out->pname,
+			&board_out->serial,
+			&board_out->pn,
+			&board_out->file,
+		},
+		[FRU_PRODUCT_INFO] = {
+			&product_out->mfg,
+			&product_out->pname,
+			&product_out->pn,
+			&product_out->ver,
+			&product_out->serial,
+			&product_out->atag,
+			&product_out->file,
+		}
+	};
+	size_t field_count[FRU_MAX_AREAS] = {
+		[FRU_CHASSIS_INFO] = FRU_CHASSIS_FIELD_COUNT,
+		[FRU_BOARD_INFO] = FRU_BOARD_FIELD_COUNT,
+		[FRU_PRODUCT_INFO] = FRU_PROD_FIELD_COUNT,
+	};
+
+	DEBUG("Decoding area type %d\n", atype);
+
+	area_out->langtype = area->langtype;
+
+	switch (atype) {
+		case FRU_CHASSIS_INFO:
+			field = (fru_field_t *)area->data;
+			data = field;
+			cust = &chassis_out->cust;
+			break;
+		case FRU_PRODUCT_INFO:
+			field = (fru_field_t *)area->data;
+			data = field;
+			cust = &product_out->cust;
+			break;
+		case FRU_BOARD_INFO:
+			{
+				/* Board area has a slightly different layout than the other
+				 * generic areas, account for its specifics here */
+				const fru_board_area_t *board = data_in;
+				// NOTE: host is not always little endian! //
+				union {
+					uint32_t val;
+					uint8_t arr[4];
+				} min_since_1996_big_endian = { 0 };
+				min_since_1996_big_endian.arr[1] = board->mfgdate[2];
+				min_since_1996_big_endian.arr[2] = board->mfgdate[1];
+				min_since_1996_big_endian.arr[3] = board->mfgdate[0];
+				uint32_t min_since_1996 = be32toh(min_since_1996_big_endian.val);
+				// The argument to mktime is zoneless
+				board_out->tv.tv_sec = fru_datetime_base() + 60 * min_since_1996;
+				field = (fru_field_t *)board->data;
+			}
+			data = field;
+			cust = &board_out->cust;
+			break;
+		default:
+			DEBUG("Attempt to decode unsupported area type (%d)\n", atype);
+			return false;
+	}
+
+	for (size_t i = 0; i < field_count[atype]; i++) {
+		field = (fru_field_t*)data;
+		if (!fru_decode_data(field, out_field[atype][i]))
+			return false;
+		data += FRU_FIELDSIZE(field->typelen);
+		bytes_left -= FRU_FIELDSIZE(field->typelen);
+	}
+
+	DEBUG("Decoded mandatory fields of area type %d\n", atype);
+	return fru_decode_custom_fields(data, bytes_left, cust);
 }
 
 bool fru_decode_chassis_info(const fru_chassis_area_t *area,
                              fru_exploded_chassis_t *chassis_out)
 {
-	chassis_out->type = area->langtype;
-	const uint8_t *data = area->data;
-	int bytes_left = area->blocks * FRU_BLOCK_SZ;
-	fru_field_t *field = (fru_field_t*)data;
-
-	if(!fru_decode_data(field, &chassis_out->pn,
-	                    sizeof(chassis_out->pn.val)))
-	{
-		return false;
-	}
-
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &chassis_out->serial,
-	                     sizeof(chassis_out->serial.val)))
-	{
-		return false;
-	}
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	fru_decode_custom_fields(data, bytes_left, &chassis_out->cust);
-
-	return true;
+	return fru_decode_area_info(FRU_CHASSIS_INFO, area, chassis_out);
 }
 
 /**
@@ -989,37 +1236,30 @@ bool fru_decode_chassis_info(const fru_chassis_area_t *area,
  * @returns fru_info_area_t *area A newly allocated buffer containing the
  * created area
  */
-fru_board_area_t * fru_encode_board_info(const fru_exploded_board_t *board)
+fru_board_area_t * fru_encode_board_info(fru_exploded_board_t *board)
 {
 	if(!board) {
 		errno = EFAULT;
 		return NULL;
 	}
 
-	// List of fields. Mandatory fields are unallocated yet.
+	/*
+	 * List of decoded fields. First mandatory, then custom.
+	 */
 	fru_reclist_t fields[] = {
-		[FRU_BOARD_MFG]      = { NULL, &fields[FRU_BOARD_PRODNAME] },
-		[FRU_BOARD_PRODNAME] = { NULL, &fields[FRU_BOARD_SERIAL] },
-		[FRU_BOARD_SERIAL]   = { NULL, &fields[FRU_BOARD_PARTNO] },
-		[FRU_BOARD_PARTNO]   = { NULL, &fields[FRU_BOARD_FILE] },
-		[FRU_BOARD_FILE]     = { NULL, board->cust },
+		[FRU_BOARD_MFG]      = { &board->mfg, &fields[FRU_BOARD_PRODNAME] },
+		[FRU_BOARD_PRODNAME] = { &board->pname, &fields[FRU_BOARD_SERIAL] },
+		[FRU_BOARD_SERIAL]   = { &board->serial, &fields[FRU_BOARD_PARTNO] },
+		[FRU_BOARD_PARTNO]   = { &board->pn, &fields[FRU_BOARD_FILE] },
+		[FRU_BOARD_FILE]     = { &board->file, board->cust },
 	};
 
-	const decoded_field_t strings[] = {
-		board->mfg,
-		board->pname,
-		board->serial,
-		board->pn,
-		board->file
-	};
 	fru_board_area_t *out = NULL;
 
 	out = (fru_board_area_t *)fru_create_info_area(FRU_BOARD_INFO,
 	                                               board->lang,
 	                                               &board->tv,
-	                                               fields,
-	                                               ARRAY_SZ(strings),
-	                                               strings);
+	                                               fields);
 
 	return out;
 }
@@ -1027,62 +1267,7 @@ fru_board_area_t * fru_encode_board_info(const fru_exploded_board_t *board)
 bool fru_decode_board_info(const fru_board_area_t *area,
                            fru_exploded_board_t *board_out)
 {
-	fru_field_t *field;
-	const uint8_t *data = area->data;
-	int bytes_left = area->blocks * FRU_BLOCK_SZ;
-
-	board_out->lang = area->langtype;
-
-	// NOTE: host is not always little endian! //
-	union {
-		uint32_t val;
-		uint8_t arr[4];
-	} min_since_1996_big_endian = { 0 };
-	min_since_1996_big_endian.arr[1] = area->mfgdate[2];
-	min_since_1996_big_endian.arr[2] = area->mfgdate[1];
-	min_since_1996_big_endian.arr[3] = area->mfgdate[0];
-	uint32_t min_since_1996 = be32toh(min_since_1996_big_endian.val);
-	// The argument to mktime is zoneless
-	board_out->tv.tv_sec = fru_datetime_base() + 60 * min_since_1996;
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &board_out->mfg,
-	                     sizeof(board_out->mfg.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &board_out->pname,
-	                     sizeof(board_out->pname.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &board_out->serial,
-	                     sizeof(board_out->serial.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &board_out->pn,
-	                     sizeof(board_out->pn.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &board_out->file,
-	                     sizeof(board_out->file.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	fru_decode_custom_fields(data, bytes_left, &board_out->cust);
-
-	return true;
+	return fru_decode_area_info(FRU_BOARD_INFO, area, board_out);
 }
 
 /**
@@ -1106,34 +1291,30 @@ bool fru_decode_board_info(const fru_board_area_t *area,
  *                                created area
  *
  */
-fru_product_area_t * fru_encode_product_info(const fru_exploded_product_t *product)
+fru_product_area_t * fru_encode_product_info(fru_exploded_product_t *product)
 {
 	if(!product) {
 		errno = EFAULT;
 		return NULL;
 	}
 
-	// List of fields. Mandatory fields are unallocated yet.
+	/*
+	 * List of decoded fields. First mandatory, then custom.
+	 */
 	fru_reclist_t fields[] = {
-		[FRU_PROD_MFG]     = { NULL, &fields[FRU_PROD_NAME] },
-		[FRU_PROD_NAME]    = { NULL, &fields[FRU_PROD_MODELPN] },
-		[FRU_PROD_MODELPN] = { NULL, &fields[FRU_PROD_VERSION] },
-		[FRU_PROD_VERSION] = { NULL, &fields[FRU_PROD_SERIAL] },
-		[FRU_PROD_SERIAL]  = { NULL, &fields[FRU_PROD_ASSET] },
-		[FRU_PROD_ASSET]   = { NULL, &fields[FRU_PROD_FILE] },
-		[FRU_PROD_FILE]    = { NULL, product->cust },
+		[FRU_PROD_MFG]     = { &product->mfg, &fields[FRU_PROD_NAME] },
+		[FRU_PROD_NAME]    = { &product->pname, &fields[FRU_PROD_MODELPN] },
+		[FRU_PROD_MODELPN] = { &product->pn, &fields[FRU_PROD_VERSION] },
+		[FRU_PROD_VERSION] = { &product->ver, &fields[FRU_PROD_SERIAL] },
+		[FRU_PROD_SERIAL]  = { &product->serial, &fields[FRU_PROD_ASSET] },
+		[FRU_PROD_ASSET]   = { &product->atag, &fields[FRU_PROD_FILE] },
+		[FRU_PROD_FILE]    = { &product->file, product->cust },
 	};
 
-	const decoded_field_t strings[] = {
-		product->mfg, product->pname,
-		product->pn, product->ver,
-		product->serial, product->atag,
-		product->file };
 	fru_product_area_t *out = NULL;
 
 	out = fru_create_info_area(FRU_PRODUCT_INFO,
-	                           product->lang, NULL, fields,
-	                           ARRAY_SZ(strings), strings);
+	                           product->lang, NULL, fields);
 
 	return out;
 }
@@ -1260,26 +1441,26 @@ static int fru_mr_mgmt_blob2rec(fru_mr_rec_t **rec,
 }
 
 int fru_mr_mgmt_str2rec(fru_mr_rec_t **rec,
-                        const unsigned char *str,
+                        const char *str,
                         fru_mr_mgmt_type_t type)
 {
 	size_t len;
 
 	if (!str) return -EFAULT;
 
-	len = strulen(str);
+	len = strlen(str);
 
 	return fru_mr_mgmt_blob2rec(rec, str, len, type);
 }
 
-int fru_mr_uuid2rec(fru_mr_rec_t **rec, const unsigned char *str)
+int fru_mr_uuid2rec(fru_mr_rec_t **rec, const char *str)
 {
 	size_t len;
 	uuid_t uuid;
 
 	if (!str) return -EFAULT;
 
-	len = strulen(str);
+	len = strlen(str);
 
 	if(UUID_STRLEN_DASHED != len && UUID_STRLEN_NONDASHED != len) {
 		return -EINVAL;
@@ -1409,35 +1590,6 @@ int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
 	return 0;
 }
 
-/**
- * Allocate a new multirecord reclist entry and add it to \a reclist,
- * set \a reclist to point to the newly allocated entry if
- * \a reclist was NULL.
- *
- * @returns Pointer to the added entry
- */
-fru_mr_reclist_t *add_mr_reclist(fru_mr_reclist_t **reclist)
-{
-	fru_mr_reclist_t *rec;
-	fru_mr_reclist_t *reclist_ptr = *reclist;
-	rec = calloc(1, sizeof(*rec));
-	if(!rec) return NULL;
-
-	// If the reclist is empty, update it
-	if(!reclist_ptr) {
-		*reclist = rec;
-	} else {
-		// If the reclist is not empty, find the last entry,
-		// and append the new one as next
-		while(reclist_ptr->next)
-			reclist_ptr = reclist_ptr->next;
-
-		reclist_ptr->next = rec;
-	}
-
-	return rec;
-}
-
 fru_mr_area_t *fru_encode_mr_area(fru_mr_reclist_t *reclist, size_t *total)
 {
 	fru_mr_area_t *area = NULL;
@@ -1488,65 +1640,9 @@ fru_mr_area_t *fru_encode_mr_area(fru_mr_reclist_t *reclist, size_t *total)
 bool fru_decode_product_info(const fru_product_area_t *area,
                              fru_exploded_product_t *product_out)
 {
-	fru_field_t *field;
-	const uint8_t *data = area->data;
-	int bytes_left = area->blocks * FRU_BLOCK_SZ;
-
-	product_out->lang = area->langtype;
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &product_out->mfg,
-	                     sizeof(product_out->mfg.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &product_out->pname,
-	                     sizeof(product_out->pname.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &product_out->pn,
-	                     sizeof(product_out->pn.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &product_out->ver,
-	                     sizeof(product_out->ver.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &product_out->serial,
-	                     sizeof(product_out->serial.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &product_out->atag,
-	                     sizeof(product_out->atag.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	field = (fru_field_t*)data;
-	if (!fru_decode_data(field, &product_out->file,
-	                     sizeof(product_out->file.val)))
-		return false;
-	data += FRU_FIELDSIZE(field->typelen);
-	bytes_left -= FRU_FIELDSIZE(field->typelen);
-
-	fru_decode_custom_fields(data, bytes_left, &product_out->cust);
-
-	return true;
+	return fru_decode_area_info(FRU_PRODUCT_INFO, area, product_out);
 }
+
 
 /**
  * Create a FRU information file.
@@ -1867,7 +1963,7 @@ int fru_decode_mr_area(const fru_mr_area_t *area,
 		}
 		memmove(rec, srec, rec_sz);
 
-		mr_reclist_tail = add_mr_reclist(reclist);
+		mr_reclist_tail = add_reclist(reclist);
 		if (!mr_reclist_tail) {
 			count = -1;
 			break;
@@ -1893,10 +1989,10 @@ out:
 
 bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
                                   size_t area_len,
-                                  uint8_t **out,
+                                  char **out,
                                   fru_flags_t flags __attribute__((unused)))
 {
-	uint8_t *hexstring;
+	char *hexstring;
 	/* Internal Use Area size includes the version byte header that
 	 * we don't want to decode, so we subtract the header size. */
 	size_t data_len = area_len - sizeof(*area);
@@ -1926,9 +2022,28 @@ bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
 	return true;
 }
 
+const char * fru_enc_name_by_type(field_type_t type)
+{
+
+	if (type < FIELD_TYPE_AUTO || type >= TOTAL_FIELD_TYPES) {
+		return "undefined";
+	}
+
+	return fru_enc_type_names[type];
+}
+
+field_type_t fru_enc_type_by_name(const char *name)
+{
+	for (field_type_t i = 0; i < TOTAL_FIELD_TYPES; i++) {
+		if (!strcmp(name, fru_enc_type_names[i]))
+			return i;
+	}
+	return FIELD_TYPE_UNKNOWN;
+}
+
 #ifdef __STANDALONE__
 
-void dump(int len, const unsigned char *data)
+void dump(int len, const char *data)
 {
 	int i;
 	printf("Data Dump:");
@@ -1943,27 +2058,30 @@ void test_encodings(void)
 {
 	int i, len;
 	uint8_t typelen;
-	unsigned char *test_strings[] = {
+	decoded_field_t test_strings[] = {
 		/* 6-bit ASCII */
-		"IPMI", "OK!",
+		{ FIELD_TYPE_AUTO, "IPMI" },
+		{ FIELD_TYPE_AUTO, "OK!" },
 		/* BCD plus */
-		"1234-56-7.89 01",
+		{ FIELD_TYPE_AUTO, "1234-56-7.89 01" },
 		/* Simple text */
-		"This is a simple text, with punctuation & other stuff",
-		/* Binary */
-		"\x00\x01\x02\x03\x04\x05 BINARY TEST"
+		{ FIELD_TYPE_AUTO, "This is a simple text, with punctuation & other stuff" },
+		/* Binary (hex string) */
+		{ FIELD_TYPE_BINARY, "010203040506070809" },
+		/* Binary (true binary) */
+		{ FIELD_TYPE_AUTO, "\x01\x02\x03\x04\x05 BINARY TEST"
 	};
-	unsigned char *test_types[] = {
+	char *test_types[] = {
 		"6-bit", "6-bit",
 		"BCPplus",
 		"Simple text",
-		"Binary"
+		"Binary hex string",
+		"True Binary"
 	};
-	int test_lengths[] = { LEN_AUTO, LEN_AUTO, LEN_AUTO, LEN_AUTO, 18 };
 
 	for(i = 0; i < ARRAY_SZ(test_strings); i++) {
 		fru_field_t *field;
-		const unsigned char out[FRU_FIELDMAXARRAY];
+		const char out[FRU_FIELDMAXARRAY];
 
 		printf("Data set %d.\n", i);
 		printf("Original data ");
@@ -1972,7 +2090,7 @@ void test_encodings(void)
 
 		printf("Original type: %s\n", test_types[i]);
 		printf("Encoding... ");
-		field = fru_encode_data(test_lengths[i], test_strings[i]);
+		field = fru_encode_data(test_strings[i]);
 		if (FRU_FIELD_TERMINATOR == field->typelen) {
 			printf("FAIL!\n\n");
 			continue;

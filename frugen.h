@@ -56,15 +56,6 @@ extern volatile int debug_level;
 	}                                   \
 } while(0)
 
-static inline
-int typelen2ind(uint8_t field) {
-	if (FIELD_TYPE_T(field) < TOTAL_FIELD_TYPES)
-		return FIELD_TYPE_T(field);
-	else
-		return FIELD_TYPE_AUTO;
-}
-
-fru_field_t * fru_encode_custom_binary_field(const char *hexstr);
 bool datestr_to_tv(const char *datestr, struct timeval *tv);
 
 /**
