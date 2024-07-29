@@ -27,6 +27,7 @@
 #include <limits.h>
 #include <ctype.h>
 #include "fru.h"
+#include "fru-errno.h"
 #include "frugen.h"
 #include "smbios.h"
 
@@ -194,7 +195,7 @@ void load_from_binary_file(const char *fname,
 		info->has_internal = true;
 	}
 	else {
-		debug(2, "No internal use area found: %m");
+		debug(2, "No internal use area found: %s", fru_strerr(fru_errno));
 	}
 
 	errno = 0;
@@ -207,7 +208,7 @@ void load_from_binary_file(const char *fname,
 		info->has_chassis = true;
 	}
 	else {
-		debug(2, "No chassis area found: %m");
+		debug(2, "No chassis area found: %s", fru_strerr(fru_errno));
 	}
 
 	errno = 0;
@@ -251,7 +252,7 @@ void load_from_binary_file(const char *fname,
 		info->has_multirec = true;
 	}
 	else {
-		debug(2, "No multirecord area found: %m");
+		debug(2, "No multirecord area found: %s", fru_strerr(fru_errno));
 	}
 
 	free(buffer);
@@ -309,8 +310,8 @@ void save_to_text_file(FILE **fp, const char *fname,
 		fputs("Internal use area\n", *fp);
 		internal = fru_encode_internal_use_area(info->fru.internal_use, &blocklen);
 		if (!internal)
-			fatal("Failed to encode internal use area: %m\n"
-				  "Check that the value is a hex string of even bytes length");
+			fatal("Failed to encode internal use area: %s\n",
+				  fru_strerr(fru_errno));
 		fhexdump(*fp, "\t", internal->data, FRU_BYTES(blocklen));
 	}
 
@@ -436,8 +437,8 @@ void save_to_binary_file(const char *fname,
 		debug(1, "FRU file will have an internal use area");
 		internal = fru_encode_internal_use_area(info->fru.internal_use, blocklen);
 		if (!internal)
-			fatal("Failed to encode internal use area: %m\n"
-				  "Check that the value is a hex string of even bytes length");
+			fatal("Failed to encode internal use area: %s\n",
+				  fru_strerr(fru_errno));
 		free(info->fru.internal_use);
 		info->fru.internal_use = NULL;
 		info->areas[FRU_INTERNAL_USE].data = internal;
@@ -456,7 +457,8 @@ void save_to_binary_file(const char *fname,
 			info->areas[FRU_CHASSIS_INFO].data = ci;
 		else {
 			errno = e;
-			fatal("Error allocating a chassis info area: %m");
+			fatal("Error allocating a chassis info area: %s",
+			      fru_strerr(fru_errno));
 		}
 	}
 
@@ -480,7 +482,8 @@ void save_to_binary_file(const char *fname,
 			info->areas[FRU_BOARD_INFO].data = bi;
 		else {
 			errno = e;
-			fatal("Error allocating a board info area: %m");
+			fatal("Error allocating a board info area: %s",
+			      fru_strerr(fru_errno));
 		}
 	}
 
@@ -498,7 +501,8 @@ void save_to_binary_file(const char *fname,
 			info->areas[FRU_PRODUCT_INFO].data = pi;
 		else {
 			errno = e;
-			fatal("Error allocating a product info area: %m");
+			fatal("Error allocating a product info area: %s",
+			      fru_strerr(fru_errno));
 		}
 	}
 
@@ -521,13 +525,15 @@ void save_to_binary_file(const char *fname,
 		}
 		else {
 			errno = e;
-			fatal("Error allocating a multirecord area: %m");
+			fatal("Error allocating a multirecord area: %s",
+			      fru_strerr(fru_errno));
 		}
 	}
 
 	fru = fru_create(info->areas, &size);
 	if (!fru) {
-		fatal("Error allocating a FRU file buffer: %m");
+		fatal("Error allocating a FRU file buffer: %s",
+		      fru_strerr(fru_errno));
 	}
 
 	debug(1, "Writing %lu bytes of FRU data", (long unsigned int)FRU_BYTES(size));
@@ -936,7 +942,8 @@ int main(int argc, char *argv[])
 				case 'U': // UUID
 					errno = fru_mr_uuid2rec(&mr_reclist_tail->rec, optarg);
 					if (errno) {
-						fatal("Failed to convert UUID: %m");
+						fatal("Failed to convert UUID: %s",
+						      fru_strerr(fru_errno));
 					}
 					break;
 				default:

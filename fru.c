@@ -23,6 +23,8 @@
 #include <errno.h>
 #include <inttypes.h>
 
+#include "fru-errno.h"
+
 #define _BSD_SOURCE
 #include <endian.h>
 
@@ -171,8 +173,10 @@ int16_t hex2byte(const char *hex) {
 	int16_t hi = hextable[(off_t)hex[0]];
 	int16_t lo = hextable[(off_t)hex[1]];
 
-	if (hi < 0 || lo < 0)
+	if (hi < 0 || lo < 0) {
+		fru_errno = EINVAL;
 		return -1;
+	}
 
 	return ((hi << 4) | lo);
 }
@@ -285,8 +289,11 @@ fru_field_t *fru_encode_6bit(const char *s /**< [in] Input string */)
 	fru_field_t *out = NULL;
 	size_t outlen = sizeof(fru_field_t) + len6bit;
 
+	fru_errno = FERANGE;
 	if (len6bit > FRU_FIELDDATALEN(len6bit) || !(out = calloc(1, outlen)))
 	{
+		if (!out)
+			fru_errno = errno;
 		return out;
 	}
 
@@ -401,9 +408,11 @@ fru_field_t *fru_encode_bcdplus(const char *s /**< [in] Input string */)
 	size_t outlen = sizeof(fru_field_t) + lenbcd;
 	uint8_t c[2] = { 0 };
 
+	fru_errno = FERANGE;
 	if (lenbcd > FRU_FIELDDATALEN(lenbcd) || !(out = calloc(1, outlen)))
 	{
-		errno = EMSGSIZE;
+		if (!out)
+			fru_errno = errno;
 		return out;
 	}
 
@@ -501,16 +510,18 @@ fru_field_t *fru_encode_text(const char *s /**< [in] Input string */)
 	// For TEXT encoding length 1 means "end-of-fields"
 	size_t outlen = ((len == 1) ? 2 : len);
 
+	fru_errno = FERANGE;
 	if (len > FRU_FIELDDATALEN(len)
 	    || !(out = calloc(1, sizeof(fru_field_t) + outlen)))
 	{
-		errno = EMSGSIZE;
+		if (!out)
+			fru_errno = errno;
 		return out;
 	}
 
 	out->typelen = FRU_TYPELEN(TEXT, len);
 	memcpy(out->data, s, len); // We don't want the nul-byte in the destination
-
+	fru_errno = 0;
 	return out;
 }
 
@@ -550,20 +561,21 @@ uint8_t * fru_encode_binary_string(size_t *len, const char *hexstr)
 
 	if (!len) {
 		DEBUG("Storage for hex string length is not provided\n");
-		errno = ENOMEM;
+		fru_errno = ENOMEM;
 		return NULL;
 	}
 
 	*len = strlen(hexstr);
 	if (*len % 2) {
 		DEBUG("Must provide even number of nibbles for binary data\n");
-		errno = EILSEQ;
+		fru_errno = FENOTEVEN;
 		return NULL;
 	}
 	*len /= 2;
 	buf = malloc(*len);
 	if (!buf) {
 		DEBUG("Failed to allocate a buffer for binary data\n");
+		fru_errno = errno;
 		return NULL; /* errno from malloc */
 	}
 	for (i = 0; i < *len; i++) {
@@ -572,7 +584,7 @@ uint8_t * fru_encode_binary_string(size_t *len, const char *hexstr)
 		      i, hexstr[2 * i], hexstr[2 * i + 1], byte);
 		if (byte < 0) {
 			DEBUG("Invalid hex data provided for binary attribute\n");
-			errno = EINVAL;
+			fru_errno = FENONHEX;
 			return NULL;
 		}
 		buf[i] = byte;
@@ -610,9 +622,8 @@ fru_field_t * fru_encode_binary(const char *hexstr)
 
 	out = calloc(1, sizeof(fru_field_t) + len);
 	if (!out) {
-		typeof(errno) err = errno;
+		fru_errno = errno;
 		free(buf);
-		errno = err;
 		return NULL;
 	}
 
@@ -697,7 +708,7 @@ fru_field_t * fru_encode_data(decoded_field_t *field)
 
 	if (field->type < FIELD_TYPE_AUTO || field->type >= TOTAL_FIELD_TYPES) {
 		DEBUG("ERROR: Field encoding type is invalid (%d)\n", field->type);
-		errno = ERANGE;
+		fru_errno = FEBADENC;
 		return NULL;
 	}
 
@@ -708,13 +719,13 @@ fru_field_t * fru_encode_data(decoded_field_t *field)
 	realtype = fru_detect_type(field->val);
 	if (realtype == FIELD_TYPE_TOOLONG) {
 		DEBUG("ERROR: Data in field is too long\n");
-		errno = EMSGSIZE;
+		fru_errno = FELONGINPUT;
 		return NULL;
 	}
 
 	if (realtype == FIELD_TYPE_NONPRINTABLE) {
 		DEBUG("ERROR: Data in field contains non-printable characters\n");
-		errno = EBADMSG;
+		fru_errno = FENONPRINT;
 		return NULL;
 	}
 
@@ -723,12 +734,18 @@ fru_field_t * fru_encode_data(decoded_field_t *field)
 	}
 	else if (field->type != FIELD_TYPE_BINARY && realtype > field->type) {
 		DEBUG("ERROR: Data in field exceeds the specified type's range\n");
-		errno = ERANGE;
+		/* TODO: Add command line option to specify type for fields */
+		/* TODO: Add command line option to allow automatic type expansion */
+		fru_errno = FERANGE;
 		return NULL;
 	}
 
 	if (!len || field->type == FIELD_TYPE_EMPTY) {
 		out = calloc(1, sizeof(fru_field_t));
+		if (!out) {
+			fru_errno = errno;
+			return NULL;
+		}
 		out->typelen = FRU_FIELD_EMPTY;
 		return out;
 	}
@@ -913,13 +930,11 @@ fru_info_area_t *fru_create_info_area(fru_area_type_t atype,
 		/* Allocate a new entry for the list of encoded fields */
 		encoded_recptr = add_reclist(&encoded_fields);
 		if (!encoded_recptr) {
-			errno = ENOMEM;
 			goto err_fields;
 		}
 
 		encoded_recptr->rec = fru_encode_data(field->rec);
 		if (!encoded_recptr->rec) {
-			errno = ENOMEM;
 			goto err_fields;
 		}
 		/* Update the total size of all encoded (mandatory and custom) fields */
@@ -936,7 +951,10 @@ fru_info_area_t *fru_create_info_area(fru_area_type_t atype,
 	out = calloc(1, FRU_BYTES(header.blocks));
 	outp = out;
 
-	if (!out) goto err_fields;
+	if (!out) {
+		fru_errno = errno;
+		goto err_fields;
+	}
 
 	// Now fill the output buffer. First copy the header.
 	memcpy(outp, &header, headerlen);
@@ -986,15 +1004,21 @@ bool fru_decode_custom_fields(const char *data,
 
 		fru_reclist_t *custom_field = add_reclist(reclist);
 		if (custom_field == NULL) {
-			DEBUG("Failed to allocate reclist: %m\n");
+			DEBUG("Failed to allocate reclist: %s\n", fru_strerr(fru_errno));
 			return false;
 		}
 
 		size_t length = FRU_FIELDDATALEN(field->typelen);
 		custom_field->rec = calloc(1, sizeof(*(custom_field->rec)));
+		if (!custom_field->rec) {
+			fru_errno = errno;
+			free_reclist(*reclist);
+			return false;
+		}
 		custom_field->rec->type = FIELD_TYPE_T(field->typelen);
 		if (!fru_decode_data(field, custom_field->rec)) {
-			DEBUG("Failed to decode custom field: %m");
+			DEBUG("Failed to decode custom field: %s\n", fru_strerr(fru_errno));
+			free_reclist(*reclist);
 			return false;
 		}
 		data += length + sizeof(fru_field_t);
@@ -1017,7 +1041,7 @@ fru_internal_use_area_t *fru_encode_internal_use_area(const void *data, uint8_t 
 	fru_internal_use_area_t *area = NULL;
 
 	if (!data) {
-		errno = EFAULT;
+		fru_errno = EFAULT;
 		goto err;
 	}
 
@@ -1025,22 +1049,23 @@ fru_internal_use_area_t *fru_encode_internal_use_area(const void *data, uint8_t 
 
 	/* Must provide even number of nibbles for binary data */
 	if (!len || (len % 2)) {
-		errno = EINVAL;
+		fru_errno = FEHEXLEN;
 		goto err;
 	}
 
 	len /= 2;
 	*blocks = FRU_BLOCKS(len + sizeof(*area));
 	area = calloc(1, FRU_BYTES(*blocks));
-	if (!area)
+	if (!area) {
+		fru_errno = errno;
 		goto err;
+	}
 
 	area->ver = FRU_VER_1;
 	for (i = 0; i < len; ++i) {
 		int16_t byte = hex2byte(data + 2 * i);
 		if (byte < 0) {
 			free(area);
-			errno = EINVAL;
 			goto err;
 		}
 		area->data[i] = byte;
@@ -1076,7 +1101,7 @@ out:
 fru_chassis_area_t * fru_encode_chassis_info(fru_exploded_chassis_t *chassis)
 {
 	if(!chassis) {
-		errno = EFAULT;
+		fru_errno = EFAULT;
 		return NULL;
 	}
 
@@ -1091,7 +1116,7 @@ fru_chassis_area_t * fru_encode_chassis_info(fru_exploded_chassis_t *chassis)
 	fru_chassis_area_t *out = NULL;
 
 	if (!SMBIOS_CHASSIS_IS_VALID(chassis->type)) {
-		errno = EINVAL;
+		fru_errno = FEINVCHAS;
 		return NULL;
 	}
 
@@ -1346,7 +1371,7 @@ static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
 
 	/* The record must have some data to be valid */
 	if (!rec || limit <= sizeof(fru_mr_rec_t)) {
-		errno = EFAULT;
+		fru_errno = FEMRNODATA;
 		return false;
 	}
 
@@ -1355,7 +1380,7 @@ static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
 	 * version, as well as valid checksums
 	 */
 	if (!IS_FRU_MR_VALID_VER(rec)) {
-		errno = EPROTO;
+		fru_errno = FEMRVER;
 		if (!(flags & FRU_IGNRVER))
 			return false;
 	}
@@ -1363,20 +1388,20 @@ static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
 	/* Check the header checksum, checksum byte included into header */
 	cksum = calc_checksum(rec, sizeof(fru_mr_header_t));
 	if (cksum) {
-		errno = EPROTO;
+		fru_errno = FEMRHCKSUM;
 		if (!(flags & FRU_IGNRHCKSUM))
 			return false;
 	}
 
 	if (FRU_MR_REC_SZ(rec) > limit) {
-		errno = ENOBUFS;
+		fru_errno = ENOBUFS;
 		return false;
 	}
 
 	/* Check the data checksum, checksum byte not included into data */
 	cksum = calc_checksum(rec->data, rec->hdr.len);
 	if (cksum != (int)rec->hdr.rec_checksum) {
-		errno = EPROTO;
+		fru_errno = FEMRDCKSUM;
 		if (!(flags & FRU_IGNRDCKSUM))
 			return false;
 	}
@@ -1398,18 +1423,21 @@ static int fru_mr_mgmt_blob2rec(fru_mr_rec_t **rec,
 	if (!blob) return -EFAULT;
 
 	if (type < FRU_MR_MGMT_MIN || type > FRU_MR_MGMT_MAX)
-		return -EINVAL;
+		return -FEMRMGMTRANGE;
 
 	min = fru_mr_mgmt_minlen[MGMT_TYPE_ID(type)];
 	max = fru_mr_mgmt_maxlen[MGMT_TYPE_ID(type)];
 
 	if (min > len || len > max)
-		return -EINVAL;
+		return -FEMRMGMTSIZE;
 
 	/* At this point we believe the input value is sane */
 
 	mgmt = calloc(1, sizeof(fru_mr_mgmt_rec_t) + len);
-	if (!mgmt) return errno;
+	if (!mgmt) {
+		fru_errno = errno;
+		return -fru_errno;
+	}
 
 	mgmt->hdr.type_id = FRU_MR_MGMT_ACCESS;
 	mgmt->hdr.eol_ver = FRU_MR_VER;
@@ -1422,7 +1450,7 @@ static int fru_mr_mgmt_blob2rec(fru_mr_rec_t **rec,
 	                      mgmt->hdr.len);
 	if (cksum < 0) {
 		free(mgmt);
-		return -ERANGE;
+		return -FEMRDCKSUM;
 	}
 	mgmt->hdr.rec_checksum = (uint8_t)cksum;
 
@@ -1431,7 +1459,7 @@ static int fru_mr_mgmt_blob2rec(fru_mr_rec_t **rec,
 	                      sizeof(fru_mr_header_t) - 1);
 	if (cksum < 0) {
 		free(mgmt);
-		return -ERANGE;
+		return -FEMRHCKSUM;
 	}
 	mgmt->hdr.hdr_checksum = (uint8_t)cksum;
 
@@ -1526,13 +1554,16 @@ int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *mgmt, fru_flags_t flags)
 		return -EINVAL;
 	}
 
-	errno = 0;
+	fru_errno = 0;
 	if (!is_mr_rec_valid((fru_mr_rec_t *)mgmt, SIZE_MAX, flags)) {
-		return -errno;
+		return -fru_errno;
 	}
 
 	*str = calloc(1, UUID_STRLEN_NONDASHED + 1);
-	if (!str) return -errno;
+	if (!str) {
+		fru_errno = errno;
+		return -fru_errno;
+	}
 
 	/* This is the reversed operation of uuid2rec, SMBIOS-compatible
 	 * Little-Endian encoding in the input record is assumed.
@@ -1567,23 +1598,26 @@ int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
 	    || (FRU_MR_MGMT_MIN > mgmt->subtype)
 	    || (FRU_MR_MGMT_SYS_UUID <= mgmt->subtype))
 	{
-		return -EINVAL;
+		return -FEMRMGMTTYPE;
 	}
 
 	/* Is the management record data size valid? */
 	minsize = fru_mr_mgmt_minlen[MGMT_TYPE_ID(mgmt->subtype)];
 	maxsize = fru_mr_mgmt_maxlen[MGMT_TYPE_ID(mgmt->subtype)];
 	if (minsize > mgmt->hdr.len || mgmt->hdr.len > maxsize) {
-		return -EOVERFLOW;
+		return -FEMRMGMTSIZE;
 	}
 
-	errno = 0;
+	fru_errno = 0;
 	if (!is_mr_rec_valid((fru_mr_rec_t *)mgmt, SIZE_MAX, flags)) {
-		return -errno;
+		return -fru_errno;
 	}
 
 	*str = calloc(1, mgmt->hdr.len + 1);
-	if (!*str) return -errno;
+	if (!*str) {
+		fru_errno = errno;
+		return -fru_errno;
+	}
 
 	memcpy(*str, mgmt->data, mgmt->hdr.len);
 
@@ -1605,6 +1639,7 @@ fru_mr_area_t *fru_encode_mr_area(fru_mr_reclist_t *reclist, size_t *total)
 
 	area = calloc(1, *total);
 	if (!area) {
+		fru_errno = errno;
 		*total = 0;
 		return NULL;
 	}
@@ -1681,7 +1716,7 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 
 		// Area type must be valid and match the index
 		if (!FRU_IS_ATYPE_VALID(atype) || atype != i) {
-			errno = EINVAL;
+			fru_errno = FEAREABADTYPE;
 			return NULL;
 		}
 
@@ -1715,7 +1750,10 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 	out = calloc(1, FRU_BYTES(totalblocks));
 
 	DEBUG("allocated a buffer at %p\n", out);
-	if (!out) return NULL;
+	if (!out) {
+		fru_errno = errno;
+		return NULL;
+	}
 
 	memcpy(out, (uint8_t *)&fruhdr, sizeof(fruhdr));
 
@@ -1743,7 +1781,7 @@ fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size)
 fru_t *find_fru_header(uint8_t *buffer, size_t size, fru_flags_t flags) {
 	int cksum;
 	if (size < 8) {
-		errno = ENOBUFS;
+		fru_errno = FETOOSMALL;
 		return NULL;
 	}
 	fru_t *header = (fru_t *) buffer;
@@ -1751,13 +1789,13 @@ fru_t *find_fru_header(uint8_t *buffer, size_t size, fru_flags_t flags) {
 	    || (header->rsvd != 0)
 	    || (header->pad != 0))
 	{
-		errno = EPROTO;
+		fru_errno = FEHDRVER;
 		if (!(flags & FRU_IGNFVER))
 			return NULL;
 	}
 	cksum = calc_checksum(header, sizeof(fru_t) - 1);
 	if (cksum < 0 || header->hchecksum != (uint8_t)cksum) {
-		errno = EPROTO;
+		fru_errno = EPROTO;
 		if (!(flags & FRU_IGNFHCKSUM))
 			return NULL;
 	}
@@ -1773,27 +1811,28 @@ fru_##NAME##_area_t *find_fru_##NAME##_area(uint8_t *buffer,\
 	fru_t *header = find_fru_header(buffer, size, flags); \
 	int cksum; \
 	if ((header == NULL) || (header->NAME == 0)) { \
+		fru_errno = FENOSUCHAREA; \
 		return NULL; \
 	} \
 	if (FRU_BYTES(header->NAME) + FRU_INFO_AREA_HEADER_SZ > size) { \
-		errno = ENOBUFS; \
+		fru_errno = FETOOSMALL; \
 		return NULL; \
 	} \
 	fru_##NAME##_area_t *area = \
 	    (fru_##NAME##_area_t *)(buffer + FRU_BYTES(header->NAME)); \
 	if (area->ver != FRU_VER_1) { \
-		errno = EPROTO; \
+		fru_errno = FEAREAVER; \
 		if (!(flags & FRU_IGNAVER)) \
 			return NULL; \
 	} \
 	if (FRU_BYTES(header->NAME) + FRU_BYTES(area->blocks) > size) { \
-		errno = ENOBUFS; \
+		fru_errno = FEHDRBADPTR; \
 		return NULL; \
 	} \
 	cksum = calc_checksum(((uint8_t *)area), FRU_BYTES(area->blocks) - 1); \
 	if (cksum < 0 || *(((uint8_t *)area) + FRU_BYTES(area->blocks) - 1) != \
 	                 (uint8_t)cksum) { \
-		errno = EPROTO; \
+		fru_errno = FEAREACKSUM; \
 		if (!(flags & FRU_IGNACKSUM)) \
 			return NULL; \
 	} \
@@ -1844,7 +1883,7 @@ size_t fru_mr_area_size(fru_mr_area_t *area, size_t limit, fru_flags_t flags)
 	}
 
 	if (!size) {
-		errno = ENODATA;
+		fru_errno = ENODATA;
 	}
 
 	return size;
@@ -1858,7 +1897,7 @@ fru_internal_use_area_t *find_fru_internal_use_area(
 	fru_t *header;
 
 	if (!iu_size) {
-		errno = EFAULT;
+		fru_errno = EFAULT;
 		return NULL;
 	}
 	*iu_size = 0;
@@ -1885,6 +1924,7 @@ fru_internal_use_area_t *find_fru_internal_use_area(
 	    (fru_internal_use_area_t *)(buffer + FRU_BYTES(header->internal));
 
 	if (area->ver != FRU_VER_1 && !(flags & FRU_IGNRVER)) {
+		fru_errno = FEAREAVER;
 		return NULL;
 	}
 
@@ -1899,7 +1939,7 @@ fru_mr_area_t *find_fru_mr_area(uint8_t *buffer, size_t *mr_size, size_t size,
 	fru_t *header;
 
 	if (!mr_size) {
-		errno = EFAULT;
+		fru_errno = EFAULT;
 		return NULL;
 	}
 	header = find_fru_header(buffer, size, flags);
@@ -1907,19 +1947,19 @@ fru_mr_area_t *find_fru_mr_area(uint8_t *buffer, size_t *mr_size, size_t size,
 		return NULL;
 	}
 	if (FRU_BYTES(header->multirec) + sizeof(fru_mr_rec_t) > size) {
-		errno = ENOBUFS;
+		fru_errno = ENOBUFS;
 		return NULL;
 	}
 	fru_mr_area_t *area =
 	    (fru_mr_area_t *)(buffer + FRU_BYTES(header->multirec));
 
 	limit = size - ((uint8_t *)header - buffer);
-	errno = 0;
+	fru_errno = 0;
 	*mr_size = fru_mr_area_size(area, limit, flags);
 	if (!*mr_size)
 	{
-		if (!errno)
-			errno = ENODATA;
+		if (!fru_errno)
+			fru_errno = ENODATA;
 		return NULL;
 	}
 
@@ -1981,7 +2021,7 @@ out:
 			free_reclist(*reclist);
 			*reclist = NULL;
 		}
-		errno = err;
+		fru_errno = err;
 	}
 
 	return count;
@@ -1999,7 +2039,7 @@ bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
 	size_t out_len = data_len * 2 + 1;
 
 	if (!out) {
-		errno = EFAULT;
+		fru_errno = EFAULT;
 		return false;
 	}
 
@@ -2007,14 +2047,16 @@ bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
 	 * plus an extra byte for the string terminator. */
 	hexstring = calloc(1, out_len);
 
-	if (!hexstring)
+	if (!hexstring) {
+		fru_errno = errno;
 		return false;
+	}
 
 	if(!fru_decode_raw_binary(area->data, data_len,
 	                          hexstring, out_len))
 	{
 		free(hexstring);
-		errno = ENOBUFS;
+		fru_errno = ENOBUFS;
 		return false;
 	}
 

@@ -14,6 +14,7 @@
 #include <json-c/json.h>
 
 #include "fru.h"
+#include "fru-errno.h"
 #include "frugen-json.h"
 
 #if (JSON_C_MAJOR_VERSION == 0 && JSON_C_MINOR_VERSION < 13)
@@ -245,9 +246,9 @@ bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
 				}
 
 				debug(3, "Parsing UUID %s", uuid);
-				errno = fru_mr_uuid2rec(&mr_reclist_tail->rec, uuid);
-				if (errno)
-					fatal("Failed to convert UUID: %m");
+				fru_errno = fru_mr_uuid2rec(&mr_reclist_tail->rec, uuid);
+				if (fru_errno)
+					fatal("Failed to convert UUID: %s", fru_strerr(fru_errno));
 				debug(2, "System UUID loaded from JSON: %s", uuid);
 				has_multirec = true;
 			}

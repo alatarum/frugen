@@ -48,13 +48,13 @@ add_definitions(-DVERSION="${gitver}")
 
 # build libfru
 if(BUILD_SHARED_LIB)
-  add_library(fru-shared SHARED fru.c)
+  add_library(fru-shared SHARED fru-errno.c fru.c)
   set_target_properties(fru-shared PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
   list(APPEND ALL_TARGETS "fru-shared")
 endif(BUILD_SHARED_LIB)
 
 if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
-  add_library(fru-static STATIC fru.c)
+  add_library(fru-static STATIC fru-errno.c fru.c)
   set_target_properties(fru-static PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
   list(APPEND ALL_TARGETS "fru-static")
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
