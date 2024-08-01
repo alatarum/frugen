@@ -70,8 +70,7 @@ bool json_fill_fru_area_fields(json_object *jso, int count,
 					      type, fieldnames[i]);
 					continue;
 				}
-				fields[i]->type = field_type;
-				fru_loadfield((char *)fields[i]->val, val);
+				fru_loadfield(fields[i], val, field_type);
 				debug(2, "Field %s '%s' (%s) loaded from JSON",
 				      fieldnames[i], val, type);
 				data_in_this_area = true;
@@ -79,8 +78,7 @@ bool json_fill_fru_area_fields(json_object *jso, int count,
 				const char *s = json_object_get_string(jsfield);
 				debug(2, "Field %s '%s' loaded from JSON",
 				      fieldnames[i], s);
-				fru_loadfield(fields[i]->val, s);
-				fields[i]->type = FIELD_TYPE_AUTO;
+				fru_loadfield(fields[i], s, FIELD_TYPE_AUTO);
 				data_in_this_area = true;
 			}
 		}

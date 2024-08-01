@@ -1,14 +1,14 @@
 /** @file
  *  @brief FRU generator utility
  *
- *  Copyright (C) 2016-2023 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *  Copyright (C) 2016-2024 Alexander Amelkin <alexander@amelkin.msk.ru>
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 #ifndef VERSION
 #define VERSION "v1.4-dirty-orphan"
 #endif
 
-#define COPYRIGHT_YEARS "2016-2023"
+#define COPYRIGHT_YEARS "2016-2024"
 #define MAX_FILE_SIZE 1L * 1024L * 1024L
 
 #define _GNU_SOURCE
@@ -144,6 +144,138 @@ static struct frugen_config_s config = {
 	.flags = FRU_NOFLAGS,
 	.no_curr_date = false,
 };
+
+fieldopt_t arg_to_fieldopt(char *arg)
+{
+	fieldopt_t opt = { .type = FIELD_TYPE_PRESERVE };
+
+	const char *area_type[FRU_MAX_AREAS] = {
+		// [ FRU_INTERNAL_USE ] = "internal", // Not supported
+		[ FRU_CHASSIS_INFO ] = "chassis",
+		[ FRU_BOARD_INFO ] = "board",
+		[ FRU_PRODUCT_INFO ] = "product",
+		// [ FRU_MULTIRECORD ] = "multirecord" // Not supported
+	};
+	const char *chassis_fields[FRU_CHASSIS_FIELD_COUNT] = {
+		[FRU_CHASSIS_PARTNO] = "pn",
+		[FRU_CHASSIS_SERIAL] = "serial",
+	};
+	const char *board_fields[FRU_BOARD_FIELD_COUNT] = {
+		[FRU_BOARD_MFG] = "mfg",
+		[FRU_BOARD_PRODNAME] = "pname",
+		[FRU_BOARD_SERIAL] = "serial",
+		[FRU_BOARD_PARTNO] = "pn",
+		[FRU_BOARD_FILE] = "file",
+	};
+	const char *product_fields[FRU_PROD_FIELD_COUNT] = {
+		[FRU_PROD_MFG] = "mfg",
+		[FRU_PROD_NAME] = "pname",
+		[FRU_PROD_MODELPN] = "pn",
+		[FRU_PROD_VERSION] = "version",
+		[FRU_PROD_SERIAL] = "serial",
+		[FRU_PROD_ASSET] = "atag",
+		[FRU_PROD_FILE] = "file",
+	};
+	char *p;
+	int field_max[FRU_MAX_AREAS] = {
+		[FRU_CHASSIS_INFO] = FRU_CHASSIS_FIELD_COUNT,
+		[FRU_BOARD_INFO] = FRU_BOARD_FIELD_COUNT,
+		[FRU_PRODUCT_INFO] = FRU_PROD_FIELD_COUNT,
+	};
+	const char **fields[FRU_MAX_AREAS] = {
+		[FRU_CHASSIS_INFO] = chassis_fields,
+		[FRU_BOARD_INFO] = board_fields,
+		[FRU_PRODUCT_INFO] = product_fields,
+	};
+
+	/* Check if there is an encoding specifier */
+	p = strchr(arg, ':');
+	if (p) {
+		*p = 0;
+		debug(3, "Encoding specifier found");
+		opt.type = FIELD_TYPE_AUTO;
+		if (p != arg) {
+			opt.type = fru_enc_type_by_name(arg);
+			debug(2, "Encoding requested is '%s'", arg);
+			debug(2, "Encoding parsed is '%s'", fru_enc_name_by_type(opt.type));
+			if (FIELD_TYPE_UNKNOWN == opt.type) {
+				fatal("Field encoding type '%s' is not supported", arg);
+			}
+		}
+		arg = p+1;
+	}
+	else {
+		debug(2, "Preserving original encoding (if any)");
+	}
+
+	/* Now check if the area is specified */
+	p = strchr(arg, '.');
+	if (!p || p == arg) {
+		fatal("Area name must be specified");
+	}
+	*p = 0;
+
+	for (opt.area = FRU_MAX_AREAS - 1; opt.area > FRU_AREA_NOT_PRESENT; opt.area--) {
+		if (!area_type[opt.area]) continue;
+		if (!strcmp(arg, area_type[opt.area]))
+			break;
+	}
+	if (opt.area == FRU_AREA_NOT_PRESENT) {
+		fatal("Area name '%s' is not valid", arg);
+	}
+	arg = p + 1;
+
+	/* Now check if there is value */
+	p = strchr(arg, '=');
+	if ((p && arg == p) || (!p && !strlen(arg))) {
+		fatal("Must specify field name for area '%s'", area_type[opt.area]);
+	}
+	if (!p) {
+		fatal("Must specify value for '%s.%s'",
+		      area_type[opt.area], arg);
+	}
+	*p = 0;
+
+#define FRU_FIELD_NOT_PRESENT (-1)
+	if (!field_max[opt.area]) {
+		fatal("No fields are settable for area '%s'",
+			  area_type[opt.area]);
+	}
+	for (opt.field.index = field_max[opt.area] - 1;
+		 opt.field.index > FRU_FIELD_NOT_PRESENT; opt.field.index--)
+	{
+		if (!strcmp(arg, fields[opt.area][opt.field.index]))
+			break;
+	}
+	if (opt.field.index == FRU_FIELD_NOT_PRESENT) {
+		/* No standard field found, but it still can be a custom
+		 * field specifier in form 'custom.<N>'
+		 */
+		if (!strncmp(arg, "custom", 6)) { /* It IS a custome field! */
+			char *p2;
+			opt.field.index = FRU_FIELD_CUSTOM;
+			p2 = strchr(arg, '.');
+			if (p2)
+				opt.custom_index = atoi(p2 + 1);
+			if (opt.custom_index < 0)
+				fatal("Custom field index must be positive or zero");
+		}
+		else {
+			fatal("Field '%s' doesn't exist in area '%s'",
+			      arg, area_type[opt.area]);
+		}
+	}
+	opt.value = p + 1;
+	debug(2, "Field '%s' is being set in '%s' to '%s'",
+	         opt.field.index == FRU_FIELD_CUSTOM
+	                            ? "custom"
+	                            : fields[opt.area][opt.field.index],
+	         area_type[opt.area],
+	         opt.value);
+
+
+	return opt;
+}
 
 void load_from_binary_file(const char *fname,
                            const struct frugen_config_s *config,
@@ -563,6 +695,8 @@ int main(int argc, char *argv[])
 	FILE *fp = NULL;
 	int opt;
 	int lindex;
+	bool single_option_help = false;
+	fieldopt_t fieldopt = {};
 
 	struct frugen_fruinfo_s fruinfo = {
 		.fru = {
@@ -587,76 +721,52 @@ int main(int argc, char *argv[])
 		.has_multirec = false,
 	};
 
-	bool cust_binary = false; // Flag: treat the following custom attribute as binary
-
 	const char *fname = NULL;
 
 	tzset();
 	gettimeofday(&fruinfo.fru.board.tv, NULL);
 	fruinfo.fru.board.tv.tv_sec += timezone;
 
+	/* Options are sorted by .val */
 	struct option options[] = {
-		/* Display usage help */
-		{ .name = "help",          .val = 'h', .has_arg = false },
-
-		/* Increase verbosity */
-		{ .name = "verbose",       .val = 'v', .has_arg = false },
+		/* Set board date */
+		{ .name = "board-date",    .val = 'd', .has_arg = required_argument },
 
 		/* Set debug flags */
-		{ .name = "debug",         .val = 'g', .has_arg = true },
+		{ .name = "debug",         .val = 'g', .has_arg = required_argument },
 
-		/* Mark the following '*-custom' data as binary */
-		{ .name = "binary",        .val = 'b', .has_arg = false },
-
-		/* Disable autodetection, force ASCII encoding on standard fields,
-		 * Detection of binary (out of ASCII range) stays in place.
-		 */
-		{ .name = "ascii",         .val = 'I', .has_arg = false },
+		/* Display usage help */
+		{ .name = "help",          .val = 'h', .has_arg = optional_argument },
 
 #ifdef __HAS_JSON__
 		/* Set input file format to JSON */
-		{ .name = "json",          .val = 'j', .has_arg = false },
+		{ .name = "json",          .val = 'j', .has_arg = required_argument },
 #endif
 
-		/* Set input file format to raw binary */
-		{ .name = "raw",          .val = 'r', .has_arg = false },
-
-		/* Set file to load the data from */
-		{ .name = "from",          .val = 'z', .has_arg = true },
-
 		/* Set the output data format */
-		{ .name = "out-format",    .val = 'o', .has_arg = true },
+		{ .name = "out-format",    .val = 'o', .has_arg = required_argument },
 
-		/* Chassis info area related options */
-		{ .name = "chassis-type",  .val = 't', .has_arg = true },
-		{ .name = "chassis-pn",    .val = 'a', .has_arg = true },
-		{ .name = "chassis-serial",.val = 'c', .has_arg = true },
-		{ .name = "chassis-custom",.val = 'C', .has_arg = true },
-		/* Board info area related options */
-		{ .name = "board-pname",   .val = 'n', .has_arg = true },
-		{ .name = "board-mfg",     .val = 'm', .has_arg = true },
-		{ .name = "board-date",    .val = 'd', .has_arg = true },
-		{ .name = "board-date-unspec", .val = 'u', .has_arg = false },
-		{ .name = "board-pn",      .val = 'p', .has_arg = true },
-		{ .name = "board-serial",  .val = 's', .has_arg = true },
-		{ .name = "board-file",    .val = 'f', .has_arg = true },
-		{ .name = "board-custom",  .val = 'B', .has_arg = true },
-		/* Product info area related options */
-		{ .name = "prod-name",     .val = 'N', .has_arg = true },
-		{ .name = "prod-mfg",      .val = 'G', .has_arg = true },
-		{ .name = "prod-modelpn",  .val = 'M', .has_arg = true },
-		{ .name = "prod-version",  .val = 'V', .has_arg = true },
-		{ .name = "prod-serial",   .val = 'S', .has_arg = true },
-		{ .name = "prod-file",     .val = 'F', .has_arg = true },
-		{ .name = "prod-atag",     .val = 'A', .has_arg = true },
-		{ .name = "prod-custom",   .val = 'P', .has_arg = true },
-		/* MultiRecord area related options */
-		{ .name = "mr-uuid",       .val = 'U', .has_arg = true },
+		/* Set input file format to raw binary */
+		{ .name = "raw",          .val = 'r', .has_arg = required_argument },
+
+		/* Set data and optionally type of encoding for a FRU field */
+		{ .name = "set",          .val = 's', .has_arg = required_argument },
+
+		/* Non-string fields for areas */
+		{ .name = "chassis-type",  .val = 't', .has_arg = required_argument },
+		{ .name = "board-date-unspec", .val = 'u', .has_arg = no_argument },
+
+		/* MultiRecord area options */
+		{ .name = "mr-uuid",       .val = 'U', .has_arg = required_argument },
+
+		/* Increase verbosity */
+		{ .name = "verbose",       .val = 'v', .has_arg = no_argument },
 	};
 
+	/* Sorted by index */
 	const char *option_help[] = {
-		['h'] = "Display this help",
-		['v'] = "Increase program verbosity (debug) level",
+		['d'] = "Set board manufacturing date/time, use \"DD/MM/YYYY HH:MM:SS\" format.\n\t\t"
+		        "By default the current system date/time is used unless -u is specified",
 		['g'] = "Set debug flag (use multiple times for multiple flags):\n\t\t"
 		        "\tfver  - Ignore wrong version in FRU header\n\t\t"
 			    "\taver  - Ignore wrong version in area headers\n\t\t"
@@ -665,17 +775,14 @@ int main(int argc, char *argv[])
 			    "\trhsum - Ignore wrong record header checksum (for multirecord)\n\t\t"
 			    "\trdsum - Ignore wrong data checksum (for multirecord)\n\t\t"
 			    "\trend  - Ignore missing EOL record, use any found records",
-		['b'] = "Mark the next --*-custom option's argument as binary.\n\t\t"
-			    "Use hex string representation for the next custom argument.\n"
-			    "\n\t\t"
-			    "Example: frugen --binary --board-custom 0012DEADBEAF\n"
-			    "\n\t\t"
-			    "There must be an even number of characters in a 'binary' argument",
-		['I'] = "Disable auto-encoding on all fields, force ASCII.\n\t\t"
-			    "Out of ASCII range data will still result in binary encoding",
-		['j'] = "Set input file format to JSON. Specify before '--from'",
-		['r'] = "Set input file format to raw binary. Specify before '--from'",
-		['z'] = "Load FRU information from a file, use '-' for stdout",
+		['h'] = "Display this help. Use any option name as an argument to show\n\t\t"
+		        "help for a single option.\n"
+				"\n\t\t"
+				"Examples:\n\t\t"
+				"\tfrugen -h     # Show full program help\n\t\t"
+				"\tfrugen -hhelp # Help for long option '--help'\n\t\t"
+				"\tfrugen -hh    # Help for short option '-h'",
+		['j'] = "Load FRU information from a JSON file, use '-' for stdin",
 		['o'] = "Output format, one of:\n"
 		        "\t\tbinary - Default format when writing to a file.\n"
 		        "\t\t         For stdout, the following will be used, even\n"
@@ -688,36 +795,56 @@ int main(int argc, char *argv[])
 		        ".\n\t\t         Default format when writing to stdout"
 #endif
 		        ,
+		['r'] = "Load FRU information from a raw binary file, use '-' for stdin",
+		['s'] = "Set a text field in an area to the given value, use given encoding\n\t\t"
+		        "Requires an argument in form [<encoding>:]<area>.<field>=<value>\n\t\t"
+				"If an encoding is not specified at all, frugen will attempt to\n\t\t"
+				"preserve the encoding specified in the template or will use 'auto'\n\t\t"
+				"if none is set there. To force 'auto' encoding you may either\n\t\t"
+				"specify it explicitly or use a bare ':' without any preceding text.\n"
+			    "\n\t\t"
+		        "Supported encodings:\n\t\t"
+				"\tauto      - Autodetect encoding based on the used characters.\n\t\t"
+				"\t            This will attempt to use the most compact encoding\n\t\t"
+				"\t            among the following.\n\t\t"
+		        "\t6bitascii - 6-bit ASCII, available characters:\n\t\t"
+				"\t             !\"#$%^&'()*+,-./\n\t\t"
+				"\t            1234567890:;<=>?\n\t\t"
+				"\t            @ABCDEFGHIJKLMNO\n\t\t"
+				"\t            PQRSTUVWXYZ[\\]^_\n\t\t"
+				"\tbcdplus   - BCD+, available characters:\n\t\t"
+				"\t            01234567890 -.\n\t\t"
+				"\ttext      - Plain text (Latin alphabet only).\n\t\t"
+				"\t            Characters: Any printable 8-bit ASCII byte.\n\t\t"
+				"\tbinary    - Binary data represented as a hex string.\n\t\t"
+				"\t            Characters: 0123456789ABCDEFabcdef\n"
+				"\n\t\t"
+				"For area and field names, please refer to example.json\n"
+				"\n\t\t"
+				"You may specify field name 'custom' to add a new custom field.\n\t\t"
+				"Alternatively, you may specify field name 'custom.<N>' to\n\t\t"
+				"replace the value of the custom field number N given in the\n\t\t"
+				"input template file.\n"
+				"\n\t\t"
+				"Examples:\n"
+				"\n\t\t"
+				"\tfrugen -r fru-template.bin -s text:board.pname=\"MY BOARD\" out.fru\n\t\t"
+				"\t\t# (encode board.pname as text)\n\t\t"
+				"\tfrugen -r fru-template.bin -s board.pname=\"MY BOARD\" out.fru\n\t\t"
+				"\t\t# (preserve original encoding type if possible)\n\t\t"
+				"\tfrugen -r fru-template.bin -s :board.pname=\"MY BOARD\" out.fru\n\t\t"
+				"\t\t# (auto-encode board.pname as 6-bit ASCII)\n\t\t"
+				"\tfrugen -j fru-template.json -s binary:board.custom=0102DEADBEEF out.fru\n\t\t"
+				"\t\t# (add a new binary-encoded custom field to board)\n\t\t"
+				"\tfrugen -j fru-template.json -s binary:board.custom.2=0102DEADBEEF out.fru\n\t\t"
+				"\t\t# (replace custom field 2 in board with new value)",
 		/* Chassis info area related options */
 		['t'] = "Set chassis type (hex). Defaults to 0x02 ('Unknown')",
-		['a'] = "Set chassis part number",
-		['c'] = "Set chassis serial number",
-		['C'] = "Add a custom chassis information field, may be used multiple times.\n\t\t"
-		        "NOTE: This does NOT replace the data specified in the template",
-		/* Board info area related options */
-		['n'] = "Set board product name",
-		['m'] = "Set board manufacturer name",
-		['d'] = "Set board manufacturing date/time, use \"DD/MM/YYYY HH:MM:SS\" format.\n\t\t"
-		        "By default the current system date/time is used unless -u is specified",
 		['u'] = "Don't use current system date/time for board mfg. date, use 'Unspecified'",
-		['p'] = "Set board part number",
-		['s'] = "Set board serial number",
-		['f'] = "Set board FRU file ID",
-		['B'] = "Add a custom board information field, may be used multiple times.\n\t\t"
-		        "NOTE: This does NOT replace the data specified in the template",
-		/* Product info area related options */
-		['N'] = "Set product name",
-		['G'] = "Set product manufacturer name",
-		['M'] = "Set product model / part number",
-		['V'] = "Set product version",
-		['S'] = "Set product serial number",
-		['F'] = "Set product FRU file ID",
-		['A'] = "Set product Asset Tag",
-		['P'] = "Add a custom product information field, may be used multiple times\n\t\t"
-		        "NOTE: This does NOT replace the data specified in the template",
 		/* MultiRecord area related options */
 		['U'] = "Set System Unique ID (UUID/GUID)\n\t\t"
 		        "NOTE: This does NOT replace the data specified in the template",
+		['v'] = "Increase program verbosity (debug) level",
 	};
 
 	char optstring[ARRAY_SZ(options) * 2 + 1] = {0};
@@ -727,22 +854,16 @@ int main(int argc, char *argv[])
 		optstring[k++] = options[i].val;
 		if (options[i].has_arg)
 			optstring[k++] = ':';
+		if (options[i].has_arg == optional_argument)
+			optstring[k++] = ':';
 	}
 
 	/* Process command line options */
 	do {
-		fru_reclist_t **custom = NULL;
 		bool is_mr_record = false; // The current option is an MR area record
 		lindex = -1;
 		opt = getopt_long(argc, argv, optstring, options, &lindex);
 		switch (opt) {
-			case 'b': // binary
-				debug(2, "Next custom field will be considered binary");
-				cust_binary = true;
-				break;
-			case 'I': // ASCII
-				fru_set_autodetect(false);
-				break;
 			case 'v': // verbose
 				debug_level++;
 				debug(debug_level, "Verbosity level set to %d", debug_level);
@@ -781,24 +902,53 @@ int main(int argc, char *argv[])
 					   "\n"
 					   "Options:\n\n");
 				for (i = 0; i < ARRAY_SZ(options); i++) {
-					printf("\t-%c, --%s%s\n" /* "\t-%c%s\n" */,
-					       options[i].val,
-					       options[i].name,
-					       options[i].has_arg ? " <argument>" : "");
+					if (optarg) {
+						single_option_help = true;
+						if ((optarg[1] || optarg[0] != options[i].val)
+							&& strcmp(optarg, options[i].name))
+						{
+							// Only show help for the option given in optarg
+							continue;
+						}
+					}
+					printf("\t-%c%s, --%s%s\n" /* "\t-%c%s\n" */,
+						   options[i].val,
+						   options[i].has_arg
+						   ? (options[i].has_arg == optional_argument)
+						     ? "[<argument>]"
+						     : " <argument>"
+						   : "",
+						   options[i].name,
+						   options[i].has_arg
+						   ? (options[i].has_arg == optional_argument)
+						     ? "[=<argument>]"
+						     : " <argument>"
+						   : "");
 					printf("\t\t%s.\n\n", option_help[options[i].val]);
+					if (single_option_help)
+						exit(0);
 				}
-				printf("Example (encode):\n"
-				       "\tfrugen --board-mfg \"Biggest International Corp.\" \\\n"
-				       "\t       --board-pname \"Some Cool Product\" \\\n"
-				       "\t       --board-pn \"BRD-PN-123\" \\\n"
-				       "\t       --board-date \"10/1/2017 12:58:00\" \\\n"
-				       "\t       --board-serial \"01171234\" \\\n"
-				       "\t       --board-file \"Command Line\" \\\n"
-				       "\t       --binary --board-custom \"01020304FEAD1E\" \\\n"
-				       "\t       fru.bin\n"
-				       "\n");
-				printf("Example (decode):\n"
-				       "\tfrugen --raw --from fru.bin -\n");
+				if (single_option_help && i == ARRAY_SZ(options)) {
+					fatal("No such option '%s'\n", optarg);
+				}
+				printf("Example (encode from scratch):\n"
+					   "\tfrugen -s board.mfg=\"Biggest International Corp.\" \\\n"
+					   "\t       --set board.pname=\"Some Cool Product\" \\\n"
+					   "\t       --set text:board.pn=\"BRD-PN-123\" \\\n"
+					   "\t       --board-date \"10/1/2017 12:58:00\" \\\n"
+					   "\t       --set board.serial=\"01171234\" \\\n"
+					   "\t       --set board.file=\"Command Line\" \\\n"
+					   "\t       --set binary:board.custom=\"01020304FEAD1E\" \\\n"
+					   "\t       fru.bin\n"
+					   "\n");
+				printf("Example (decode to json, output to stdout):\n"
+					   "\tfrugen --raw fru.bin -o json -\n"
+					   "\n");
+				printf("Example (modify binary file):\n"
+					   "\tfrugen --raw fru.bin \\\n"
+					   "\t       --set text:board.serial=123456789 \\\n"
+					   "\t       --set text:board.custom.1=\"My custom field\" \\\n"
+					   "\t       fru.bin\n");
 				exit(0);
 				break;
 
@@ -806,61 +956,122 @@ int main(int argc, char *argv[])
 			case 'j': // json
 				config.format = FRUGEN_FMT_JSON;
 				debug(1, "Using JSON input format");
-				break;
-#endif
-
-			case 'r': // binary
-				config.format = FRUGEN_FMT_BINARY;
-				debug(1, "Using RAW binary input format");
-				break;
-
-			case 'z': // from
 				debug(2, "Will load FRU information from file %s", optarg);
 				load_fromfile(optarg, &config, &fruinfo);
+				break;
+#endif
 
+			case 'r': // raw binary
+				config.format = FRUGEN_FMT_BINARY;
+				debug(1, "Using RAW binary input format");
+				debug(2, "Will load FRU information from file %s", optarg);
+				load_fromfile(optarg, &config, &fruinfo);
 				break;
 
-			case 'o': // out-format
+			case 'o': { // out-format
+				const char *outfmt[] = {
 #ifdef __HAS_JSON__
-				if (!strcmp(optarg, "json")) {
-					config.outformat = FRUGEN_FMT_JSON;
-				}
-				else
+					[FRUGEN_FMT_JSON] = "json",
 #endif
-				if (!strcmp(optarg, "text")) {
-					config.outformat = FRUGEN_FMT_TEXTOUT;
+					[FRUGEN_FMT_BINARY] = "binary",
+					[FRUGEN_FMT_TEXTOUT] = "text",
+				};
+
+				frugen_format_t i;
+				for (i = FRUGEN_FMT_FIRST; i <= FRUGEN_FMT_LAST; i++) {
+					if (outfmt[i] && !strcmp(optarg, outfmt[i])) {
+						config.outformat = i;
+						break;
+					}
 				}
-				else {
+				if (i != config.outformat) {
+					warn("Output format '%s' not supported, using default.",
+					     optarg);
 					debug(1, "Using default output format");
 				}
+				}
 				break;
+
+			case 's': { // set field
+				/* We intentionally waste some memory on these sparse arrays
+				 * for the sake of data/code separation */
+				decoded_field_t * const field[FRU_MAX_AREAS][FRU_MAX_FIELD_COUNT] = {
+					[FRU_CHASSIS_INFO] = {
+						[FRU_CHASSIS_PARTNO] = &fruinfo.fru.chassis.pn,
+						[FRU_CHASSIS_SERIAL] = &fruinfo.fru.chassis.serial,
+					},
+					[FRU_BOARD_INFO] = {
+						[FRU_BOARD_MFG] = &fruinfo.fru.board.mfg,
+						[FRU_BOARD_PRODNAME] = &fruinfo.fru.board.pname,
+						[FRU_BOARD_SERIAL] = &fruinfo.fru.board.serial,
+						[FRU_BOARD_PARTNO] = &fruinfo.fru.board.pn,
+						[FRU_BOARD_FILE] = &fruinfo.fru.board.file,
+					},
+					[FRU_PRODUCT_INFO] = {
+						[FRU_PROD_MFG] = &fruinfo.fru.product.mfg,
+						[FRU_PROD_NAME] = &fruinfo.fru.product.pname,
+						[FRU_PROD_MODELPN] = &fruinfo.fru.product.pn,
+						[FRU_PROD_VERSION] = &fruinfo.fru.product.ver,
+						[FRU_PROD_SERIAL] = &fruinfo.fru.product.serial,
+						[FRU_PROD_ASSET] = &fruinfo.fru.product.atag,
+						[FRU_PROD_FILE] = &fruinfo.fru.product.file,
+					},
+				};
+				fru_reclist_t ** const custom[FRU_MAX_AREAS] = {
+					[FRU_CHASSIS_INFO] = &fruinfo.fru.chassis.cust,
+					[FRU_BOARD_INFO] = &fruinfo.fru.board.cust,
+					[FRU_PRODUCT_INFO] = &fruinfo.fru.product.cust,
+				};
+				bool * const fru_has[FRU_MAX_AREAS] = {
+					[FRU_CHASSIS_INFO] = &fruinfo.has_chassis,
+					[FRU_BOARD_INFO] = &fruinfo.has_board,
+					[FRU_PRODUCT_INFO] = &fruinfo.has_product,
+				};
+
+				/* Now do the actual job and set data in the appropriate locations */
+				fieldopt = arg_to_fieldopt(optarg);
+				if (fieldopt.field.index != FRU_FIELD_CUSTOM) {
+					fru_loadfield(field[fieldopt.area][fieldopt.field.index],
+					              fieldopt.value, fieldopt.type);
+					*fru_has[fieldopt.area] = true;
+				}
+				else {
+					fru_reclist_t *cust_rec;
+					if (fieldopt.custom_index) {
+						cust_rec = find_rec(*custom[fieldopt.area],
+						                    fieldopt.custom_index);
+						if (!cust_rec) {
+							fatal("Custom field %d not found in specified area\n",
+							      fieldopt.custom_index);
+						}
+						debug(3, "Modifying custom field %d. New value is [%s]",
+						         fieldopt.custom_index, fieldopt.value);
+					}
+					else {
+						decoded_field_t *field;
+						debug(3, "Adding a custom field from argument [%s]", optarg);
+						cust_rec = add_reclist(custom[fieldopt.area]);
+						if (!cust_rec) {
+							fatal("Failed to allocate a custom record list entry");
+						}
+						field = calloc(1, sizeof(*field));
+						if (!field) {
+							fatal("Failed to process custom field. Memory allocation or field length problem.");
+						}
+						cust_rec->rec = field;
+					}
+					fru_loadfield(cust_rec->rec, fieldopt.value, fieldopt.type);
+					*fru_has[fieldopt.area] = true;
+				}
+				break;
+			}
 
 			case 't': // chassis-type
 				fruinfo.fru.chassis.type = strtol(optarg, NULL, 16);
 				debug(2, "Chassis type will be set to 0x%02X from [%s]", fruinfo.fru.chassis.type, optarg);
 				fruinfo.has_chassis = true;
 				break;
-			case 'a': // chassis-pn
-				fru_loadfield(fruinfo.fru.chassis.pn.val, optarg);
-				fruinfo.has_chassis = true;
-				break;
-			case 'c': // chassis-serial
-				fru_loadfield(fruinfo.fru.chassis.serial.val, optarg);
-				fruinfo.has_chassis = true;
-				break;
-			case 'C': // chassis-custom
-				debug(2, "Custom chassis field [%s]", optarg);
-				fruinfo.has_chassis = true;
-				custom = &fruinfo.fru.chassis.cust;
-				break;
-			case 'n': // board-pname
-				fru_loadfield(fruinfo.fru.board.pname.val, optarg);
-				fruinfo.has_board = true;
-				break;
-			case 'm': // board-mfg
-				fru_loadfield(fruinfo.fru.board.mfg.val, optarg);
-				fruinfo.has_board = true;
-				break;
+
 			case 'd': // board-date
 				debug(2, "Board manufacturing date will be set from [%s]", optarg);
 				if (!datestr_to_tv(optarg, &fruinfo.fru.board.tv))
@@ -869,56 +1080,6 @@ int main(int argc, char *argv[])
 				break;
 			case 'u': // board-date-unspec
 				config.no_curr_date = true;
-				break;
-			case 'p': // board-pn
-				fru_loadfield(fruinfo.fru.board.pn.val, optarg);
-				fruinfo.has_board = true;
-				break;
-			case 's': // board-sn
-				fru_loadfield(fruinfo.fru.board.serial.val, optarg);
-				fruinfo.has_board = true;
-				break;
-			case 'f': // board-file
-				fru_loadfield(fruinfo.fru.board.file.val, optarg);
-				fruinfo.has_board = true;
-				break;
-			case 'B': // board-custom
-				debug(2, "Custom board field [%s]", optarg);
-				fruinfo.has_board = true;
-				custom = &fruinfo.fru.board.cust;
-				break;
-			case 'N': // prod-name
-				fru_loadfield(fruinfo.fru.product.pname.val, optarg);
-				fruinfo.has_product = true;
-				break;
-			case 'G': // prod-mfg
-				fru_loadfield(fruinfo.fru.product.mfg.val, optarg);
-				fruinfo.has_product = true;
-				break;
-			case 'M': // prod-modelpn
-				fru_loadfield(fruinfo.fru.product.pn.val, optarg);
-				fruinfo.has_product = true;
-				break;
-			case 'V': // prod-version
-				fru_loadfield(fruinfo.fru.product.ver.val, optarg);
-				fruinfo.has_product = true;
-				break;
-			case 'S': // prod-serial
-				fru_loadfield(fruinfo.fru.product.serial.val, optarg);
-				fruinfo.has_product = true;
-				break;
-			case 'F': // prod-file
-				fru_loadfield(fruinfo.fru.product.file.val, optarg);
-				fruinfo.has_product = true;
-				break;
-			case 'A': // prod-atag
-				fru_loadfield(fruinfo.fru.product.atag.val, optarg);
-				fruinfo.has_product = true;
-				break;
-			case 'P': // prod-custom
-				debug(2, "Custom product field [%s]", optarg);
-				fruinfo.has_product = true;
-				custom = &fruinfo.fru.product.cust;
 				break;
 			case 'U': // All multi-record options must be listed here
 			          // and processed later in a separate switch
@@ -949,33 +1110,6 @@ int main(int argc, char *argv[])
 				default:
 					fatal("Unknown multirecord option: %c", opt);
 			}
-		}
-
-		if (custom) {
-			fru_reclist_t *custptr;
-			decoded_field_t *field = NULL;
-			debug(3, "Adding a custom field from argument [%s]", optarg);
-			custptr = add_reclist(custom);
-
-			if (!custptr)
-				fatal("Failed to allocate a custom record list entry");
-
-			field = calloc(1, sizeof(*field));
-			if (!field) {
-				fatal("Failed to process custom field. Memory allocation or field length problem.");
-			}
-			field->type = FIELD_TYPE_AUTO;
-			/* TODO: Allow all types in command line and use the same code
-			 *       here as for JSON, ditch cust_binary. Use the same function. */
-			if (cust_binary) {
-				field->type = FIELD_TYPE_BINARY;
-			}
-			else {
-				debug(3, "The custom field will be auto-typed");
-			}
-			strncpy(field->val, optarg, FRU_FIELDMAXLEN);
-			custptr->rec = field;
-			cust_binary = false;
 		}
 	} while (opt != -1);
 

@@ -46,8 +46,6 @@
 #define DEBUG(f, args...)
 #endif
 
-static bool autodetect = true;
-
 static
 const char * fru_enc_type_names[TOTAL_FIELD_TYPES] = {
 	[FIELD_TYPE_AUTO] = "auto",
@@ -80,11 +78,6 @@ static const size_t fru_mr_mgmt_maxlen[FRU_MR_MGMT_MAX] = {
 	[MGMT_TYPENAME_ID(COMPONENT_PING)] = 64,
 	[MGMT_TYPENAME_ID(SYS_UUID)] = 16
 };
-
-void fru_set_autodetect(bool enable)
-{
-	autodetect = enable;
-}
 
 /**
  * Get the FRU date/time base in seconds since UNIX Epoch
@@ -215,17 +208,10 @@ field_type_t fru_detect_type(const char *data) /**< [in] The input data */
 
 	DEBUG("Guessing type of string '%s'...\n", (char *)data);
 
-	if (autodetect) {
-		// By default - the most range-restricted text type
-		// On input we treat 'BINARY' as simple BCD (hex string)
-		type = FIELD_TYPE_BINARY;
-
-		DEBUG("Assuming binary (hex string) data...\n");
-	}
-	else {
-		DEBUG("Assuming ASCII data...\n");
-		type = FIELD_TYPE_TEXT;
-	}
+	// By default - the most range-restricted text type
+	// On input we treat 'BINARY' as simple BCD (hex string)
+	type = FIELD_TYPE_BINARY;
+	DEBUG("Assuming binary (hex string) data...\n");
 
 	// Go through the data and expand charset as needed
 	for (size_t i = 0; i < len; i++) {
@@ -239,35 +225,33 @@ field_type_t fru_detect_type(const char *data) /**< [in] The input data */
 			return -2;
 		}
 
-		if (autodetect) {
-			if (type < FIELD_TYPE_BCDPLUS
-			    && !isxdigit(data[i]))
-			{
-				// The data doesn't fit into BINARY (hex string), expand to
-				DEBUG("[%c] Data is at least BCD+!\n", data[i]);
-				type = FIELD_TYPE_BCDPLUS;
-			}
+		if (type < FIELD_TYPE_BCDPLUS
+			&& !isxdigit(data[i]))
+		{
+			// The data doesn't fit into BINARY (hex string), expand to
+			DEBUG("[%c] Data is at least BCD+!\n", data[i]);
+			type = FIELD_TYPE_BCDPLUS;
+		}
 
-			if (type < FIELD_TYPE_6BITASCII // Do not reduce the range
-			    && !isdigit(data[i])
-			    && data[i] != ' '
-			    && data[i] != '-'
-			    && data[i] != '.')
-			{
-				// The data doesn't fit into BCD plus, expand to
-				DEBUG("[%c] Data is at least 6-bit ASCII!\n", data[i]);
-				type = FIELD_TYPE_6BITASCII;
-			}
+		if (type < FIELD_TYPE_6BITASCII // Do not reduce the range
+			&& !isdigit(data[i])
+			&& data[i] != ' '
+			&& data[i] != '-'
+			&& data[i] != '.')
+		{
+			// The data doesn't fit into BCD plus, expand to
+			DEBUG("[%c] Data is at least 6-bit ASCII!\n", data[i]);
+			type = FIELD_TYPE_6BITASCII;
+		}
 
-			if (type < FIELD_TYPE_TEXT
-			    && (data[i] > '_' || data[i] < ' '))
-			{
-				// The data doesn't fit into 6-bit ASCII, expand to simple text.
-				DEBUG("[%c] Data is simple text!\n", data[i]);
-				type = FIELD_TYPE_TEXT;
-				continue;
-			}
-		} /* autodetect */
+		if (type < FIELD_TYPE_TEXT
+			&& (data[i] > '_' || data[i] < ' '))
+		{
+			// The data doesn't fit into 6-bit ASCII, expand to simple text.
+			DEBUG("[%c] Data is simple text!\n", data[i]);
+			type = FIELD_TYPE_TEXT;
+			continue;
+		}
 	}
 
 	return type;
@@ -754,6 +738,15 @@ fru_field_t * fru_encode_data(decoded_field_t *field)
 	      fru_enc_name_by_type(field->type));
 
 	return encode[field->type](field->val);
+}
+
+void fru_loadfield(decoded_field_t *field, const char *s, field_type_t enc)
+{
+	/* Sanity of the arguments is verified by the caller */
+	if (enc != FIELD_TYPE_PRESERVE)
+		field->type = enc;
+	strncpy(field->val, s, FRU_FIELDMAXLEN);
+	field->val[FRU_FIELDMAXLEN] = 0;
 }
 
 bool fru_decode_data(fru_field_t *field,
