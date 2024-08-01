@@ -7,6 +7,13 @@
 
 #pragma once
 
+#define LIBFRU_MAJOR    @PROJECT_VERSION_MAJOR@L /// Major component of the library version
+#define LIBFRU_MINOR    @PROJECT_VERSION_MINOR@L /// Minor component of the library version
+#define LIBFRU_SUBMINOR @PROJECT_VERSION_PATCH@L /// Subminor component of the library version
+#define LIBFRU_VERSION  (LIBFRU_MAJOR << 16 | \
+                         LIBFRU_MINOR << 8 | \
+                         LIBFRU_SUBMINOR) /// Integer representation of the library version
+
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>

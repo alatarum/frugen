@@ -5,7 +5,8 @@
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 #ifndef VERSION
-#define VERSION "v1.4-dirty-orphan"
+// If VERSION is not defined, that means something is wrong with CMake
+#define VERSION "BROKEN"
 #endif
 
 #define COPYRIGHT_YEARS "2016-2024"
@@ -904,7 +905,7 @@ int main(int argc, char *argv[])
 				break;
 			}
 			case 'h': // help
-				printf("FRU Generator %s (C) %s, "
+				printf("FRU Generator v%s (C) %s, "
 					   "Alexander Amelkin <alexander@amelkin.msk.ru>\n",
 					   VERSION, COPYRIGHT_YEARS);
 				printf("\n"
