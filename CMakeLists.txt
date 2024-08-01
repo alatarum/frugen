@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.0)
-project(frugen C)
 if(COMMAND cmake_policy)
 	cmake_policy(SET CMP0003 NEW)
 endif(COMMAND cmake_policy)
@@ -22,10 +21,14 @@ execute_process(COMMAND
 	OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 if(NOT res EQUAL 0)
-	set(gitver "UNKNOWN")
+	set(gitver "v2.0-dirty-orphan")
 endif()
 
+string(REPLACE "v" "" gitver "${gitver}")
 string(REPLACE "-" "." gitver "${gitver}")
+
+# This is the version of the project w/o hash information
+string(REGEX REPLACE "\\.g.*" "" gitver_short "${gitver}")
 
 option(BUILD_SHARED_LIB "build shared library" ON)
 option(BINARY_STATIC "link all libs static when compile frugen" OFF)
@@ -34,7 +37,7 @@ option(ENABLE_JSON "enable JSON support" ON)
 option(JSON_STATIC "link json-c library statically" OFF)
 option(DEBUG_OUTPUT "show extra debug output" OFF)
 
-set(CMAKE_C_FLAGS_RELEASE "-O3 -Wall -Werror -Wfatal-errors")
+set(CMAKE_C_FLAGS_RELEASE "-Os -Wall -Werror -Wfatal-errors")
 set(CMAKE_C_FLAGS_DEBUG "-g3 -O0 -Wall -Werror -Wfatal-errors")
 if(MSVC)
     # warning level 4
@@ -48,6 +51,7 @@ if(DEBUG_OUTPUT)
   add_definitions(-DDEBUG)
 endif(DEBUG_OUTPUT)
 
+project(frugen VERSION ${gitver_short} LANGUAGES C)
 add_definitions(-DVERSION="${gitver}")
 
 configure_file(fru.h.in fru.h @ONLY)
@@ -61,6 +65,8 @@ add_documentation(docs Doxyfile)
 if(BUILD_SHARED_LIB)
   add_library(fru-shared SHARED fru-errno.c fru.c)
   set_target_properties(fru-shared PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
+  set_target_properties(fru-shared PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+
   list(APPEND ALL_TARGETS "fru-shared")
 endif(BUILD_SHARED_LIB)
 
@@ -116,6 +122,7 @@ endif(JSON_LIB)
 
 # set additional params
 foreach(TARGET IN LISTS ALL_TARGETS)
+  target_include_directories(${TARGET} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
   # To make frugen 32-bit, set BINARY_32BIT or use an external toolchain file
   if(BINARY_32BIT)
     set_target_properties(${TARGET} PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
@@ -126,5 +133,5 @@ endforeach()
 install(TARGETS frugen RUNTIME DESTINATION bin)
 if(BUILD_SHARED_LIB)
   install(TARGETS fru-shared DESTINATION lib)
-  install(FILES fru.h DESTINATION include)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fru.h DESTINATION include)
 endif(BUILD_SHARED_LIB)
