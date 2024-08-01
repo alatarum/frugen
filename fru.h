@@ -79,6 +79,8 @@ typedef enum {
 	FRU_PROD_FIELD_COUNT
 } fru_prod_field_t;
 
+#define FRU_MAX_FIELD_COUNT FRU_PROD_FIELD_COUNT
+
 /// Table 16-2, MultiRecord Area Record Types
 typedef enum {
 	FRU_MR_MIN = 0x00,
@@ -298,6 +300,7 @@ typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
 typedef enum {
     FIELD_TYPE_TERMINATOR = -4,
     FIELD_TYPE_UNKNOWN = -3,
+    FIELD_TYPE_PRESERVE = FIELD_TYPE_UNKNOWN,
     FIELD_TYPE_NONPRINTABLE = -2,
     FIELD_TYPE_TOOLONG = -1,
     FIELD_TYPE_AUTO = 0,
@@ -324,6 +327,18 @@ typedef struct {
 	field_type_t type;
 	char val[FRU_FIELDMAXARRAY];
 } decoded_field_t;
+
+/**
+ * Store a string and encoding type in a decoded_field_t structure.
+ * No checks are performed except for the string length.
+ *
+ * @param[in,out] field  A pointer to a decoded field structure to fill with data
+ * @param[in]     s      The source data string
+ * @param[in]     enc    The desired encoding, use FILED_TYPE_PRESERVE to
+ *                       preserve whatever value is already in \a field.
+ *
+ */
+void fru_loadfield(decoded_field_t *field, const char *s, field_type_t enc);
 
 /**
  * A generic FRU area encoded field header structure.
@@ -392,6 +407,24 @@ static inline void *add_generic_reclist(void *genlist_ptr, size_t rec_size)
 #define add_reclist(reclist) \
 	add_generic_reclist((reclist), sizeof(*(*reclist)->rec))
 
+/**
+ * Find an \a n'th record in a list.
+ *
+ * Works both with fru_reclist_t and fru_mr_reclist_t.
+ *
+ * @param[in] reclist A pointer to any record list
+ * @param[in] n       The index of the record to find, 1-based
+ * @returns A pointer to the found record or NULL
+ */
+static inline void *find_rec(void *reclist, size_t n)
+{
+	fru_reclist_t *rl = reclist;
+
+	for (size_t i = 1; i != n && rl; rl = rl->next, i++);
+
+	return rl;
+}
+
 /// Works for any list (fru_generic_reclist_t*, fru_reclist_t*, fru_mr_reclist_t*)
 #define free_reclist(recp) while(recp) { \
 	typeof((recp)->next) next = (recp)->next; \
@@ -437,10 +470,6 @@ typedef struct {
 	fru_exploded_product_t product;
 	fru_mr_reclist_t *mr_reclist;
 } fru_exploded_t;
-
-#define fru_loadfield(eafield, value) strncpy((char *)eafield, value, FRU_FIELDMAXLEN)
-
-void fru_set_autodetect(bool enable);
 
 fru_chassis_area_t * fru_chassis_info(const fru_exploded_chassis_t *chassis);
 fru_board_area_t * fru_board_info(const fru_exploded_board_t *board);

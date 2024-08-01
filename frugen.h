@@ -14,9 +14,11 @@
 
 typedef enum {
 	FRUGEN_FMT_UNSET,
-	FRUGEN_FMT_JSON,
+	FRUGEN_FMT_FIRST,
+	FRUGEN_FMT_JSON = FRUGEN_FMT_FIRST,
 	FRUGEN_FMT_BINARY,
 	FRUGEN_FMT_TEXTOUT, /* Output format only */
+	FRUGEN_FMT_LAST = FRUGEN_FMT_TEXTOUT
 } frugen_format_t;
 
 struct frugen_fruinfo_s {
@@ -45,8 +47,17 @@ extern volatile int debug_level;
 	exit(1);                      \
 } while(0)
 
+#define warn(fmt, args...) do {   \
+	typeof(errno) e = errno;      \
+	fprintf(stderr, "WARNING: "); \
+	errno = e;                    \
+	fprintf(stderr, fmt, ##args); \
+	fprintf(stderr, "\n");        \
+	errno = e;                    \
+} while(0)
+
 #define debug(level, fmt, args...) do { \
-	int e = errno;                      \
+	typeof(errno) e = errno;            \
 	if(level <= debug_level) {          \
 		printf("DEBUG: ");              \
 		errno = e;                      \
@@ -56,7 +67,46 @@ extern volatile int debug_level;
 	}                                   \
 } while(0)
 
+#define FRU_FIELD_CUSTOM (-1) // Applicable to any area
+typedef struct {
+	field_type_t type;
+	fru_area_type_t area;
+	union {
+		// The named enums are just aliases for debug convenience only
+		fru_chassis_field_t chassis;
+		fru_board_field_t board;
+		fru_prod_field_t product;
+		int index;
+	} field;
+	char *value;
+	int custom_index;
+} fieldopt_t;
+
 bool datestr_to_tv(const char *datestr, struct timeval *tv);
+
+/*
+ * Split a `--set` command line option argument string
+ * into fields.
+ *
+ * The argument format is expected to be:
+ *
+ * [<encoding>:]<area>.<field>=<value>
+ *
+ * Works for string fields only (i.e. not chassis.type or board.date)
+ *
+ * Examples:
+ *   6bitascii:product.pn=ABCDEF123  // Force 6-bit ASCII if possible
+ *   text:procuct.name=SOMEPRODUCT   // Force plain text, prevent 6-bit
+ *   board.serial=Whatever           // Autodetect encoding
+ *   product.custom=Sometext         // Autodetect, request addition
+ *   product.custom.1=Sometext       // Autodetect, request replacement of field 1
+ *
+ * Returns field_opt_t structure.
+ * Terminates the program on parsing failure.
+ *
+ * WARNING: Modifies the input string.
+ */
+fieldopt_t arg_to_fieldopt(char *arg);
 
 /**
  * Find a Management Access record subtype by its short name
