@@ -145,6 +145,17 @@ static struct frugen_config_s config = {
 	.no_curr_date = false,
 };
 
+#define DATEBUF_SZ 20
+void tv_to_datestr(char *datestr, const struct timeval *tv)
+{
+		tzset(); // Set up local timezone
+		struct tm bdtime;
+		// Time in FRU is in UTC, convert to local
+		time_t seconds = tv->tv_sec - timezone;
+		localtime_r(&seconds, &bdtime);
+		strftime(datestr, 20, "%d/%m/%Y %H:%M:%S", &bdtime);
+}
+
 fieldopt_t arg_to_fieldopt(char *arg)
 {
 	fieldopt_t opt = { .type = FIELD_TYPE_PRESERVE };
@@ -500,8 +511,7 @@ void save_to_text_file(FILE **fp, const char *fname,
 
 	if (info->has_board) {
 		char timebuf[20] = {0};
-		struct tm* bdtime = gmtime(&info->fru.board.tv.tv_sec);
-		strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
+		tv_to_datestr(timebuf, &info->fru.board.tv);
 
 		fputs("Board\n", *fp);
 		fprintf(*fp, "\tlang: %u\n", info->fru.board.lang);

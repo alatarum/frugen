@@ -82,7 +82,15 @@ typedef struct {
 	int custom_index;
 } fieldopt_t;
 
+#define DATEBUF_SZ 20 ///< Date string buffer length (must fit "DD/MM/YYYY HH:MM:SS")
+/**
+ * Convert local date/time string to UTC time in seconds for FRU
+ */
 bool datestr_to_tv(const char *datestr, struct timeval *tv);
+/**
+ * Convert FRU time (in UTC) to a local date/time string
+ */
+void tv_to_datestr(char *datestr, const struct timeval *tv);
 
 /*
  * Split a `--set` command line option argument string
