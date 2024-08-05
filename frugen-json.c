@@ -642,9 +642,9 @@ void save_to_json_file(FILE **fp, const char *fname,
 	}
 
 	if (info->has_board) {
-		char timebuf[20] = {0};
-		struct tm* bdtime = gmtime(&info->fru.board.tv.tv_sec);
-		strftime(timebuf, 20, "%d/%m/%Y %H:%M:%S", bdtime);
+		char timebuf[DATEBUF_SZ] = {0};
+		tv_to_datestr(timebuf, &info->fru.board.tv);
+
 		section = json_object_new_object();
 		temp_obj = json_object_new_int(info->fru.board.lang);
 		json_object_object_add(section, "lang", temp_obj);
