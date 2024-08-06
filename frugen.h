@@ -92,7 +92,7 @@ bool datestr_to_tv(const char *datestr, struct timeval *tv);
  */
 void tv_to_datestr(char *datestr, const struct timeval *tv);
 
-/*
+/**
  * Split a `--set` command line option argument string
  * into fields.
  *
@@ -143,3 +143,4 @@ fru_mr_mgmt_type_t fru_mr_mgmt_type_by_name(const char *name);
  * Reverse of fru_mr_mgmt_type_by_name()
  */
 const char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type);
+
