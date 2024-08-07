@@ -4,6 +4,8 @@ if(COMMAND cmake_policy)
 	cmake_policy(SET CMP0003 NEW)
 endif(COMMAND cmake_policy)
 
+include("doxygen.cmake")
+
 execute_process(COMMAND
 	git
 	describe
@@ -47,6 +49,13 @@ if(DEBUG_OUTPUT)
 endif(DEBUG_OUTPUT)
 
 add_definitions(-DVERSION="${gitver}")
+
+configure_file(fru.h.in fru.h @ONLY)
+set(DOXY_PROJECT_NUMBER "${gitver}")
+set(DOXY_OUTPUT_LANGUAGE "English")
+set(DOXY_INPUT ${PROJECT_SOURCE_DIR})
+set(DOXY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/docs")
+add_documentation(docs Doxyfile)
 
 # build libfru
 if(BUILD_SHARED_LIB)

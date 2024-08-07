@@ -271,6 +271,8 @@ To compile debug version use the following command:
 
     cmake -DCMAKE_BUILD_TYPE=Debug -DDEBUG_OUTPUT=yes .. && make
 
+To build project documentation (requies `doxygen`), run `make docs`.
+
 ### Windows (cross-compiled on Linux)
 
 You will need a MingW32 toolchain. This chapter is written in assumption you're
