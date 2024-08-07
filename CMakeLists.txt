@@ -29,6 +29,7 @@ option(BUILD_SHARED_LIB "build shared library" ON)
 option(BINARY_STATIC "link all libs static when compile frugen" OFF)
 option(BINARY_32BIT "compile 32bit version" OFF)
 option(ENABLE_JSON "enable JSON support" ON)
+option(JSON_STATIC "link json-c library statically" OFF)
 option(DEBUG_OUTPUT "show extra debug output" OFF)
 
 set(CMAKE_C_FLAGS_RELEASE "-O3 -Wall -Werror -Wfatal-errors")
@@ -63,7 +64,11 @@ endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 unset (JSON_LIB CACHE)
 if (ENABLE_JSON)
 	# looking for JSON library
-	find_library(JSON_LIB json-c)
+	if (JSON_STATIC)
+		find_library(JSON_LIB libjson-c.a)
+	else (JSON_STATIC)
+		find_library(JSON_LIB json-c)
+	endif (JSON_STATIC)
 endif (ENABLE_JSON)
 
 # target for frugen
