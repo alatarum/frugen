@@ -65,6 +65,7 @@ if(BUILD_SHARED_LIB)
 endif(BUILD_SHARED_LIB)
 
 if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
+  #set(JSON_STATIC ON)
   add_library(fru-static STATIC fru-errno.c fru.c)
   set_target_properties(fru-static PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
   list(APPEND ALL_TARGETS "fru-static")
@@ -72,12 +73,16 @@ endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
 unset (JSON_LIB CACHE)
 if (ENABLE_JSON)
-	# looking for JSON library
-	if (JSON_STATIC)
+	# Look for JSON library.
+
+	# Prevent some weird cmake 3.13 behavior when both
+	# options are specified. BINARY_STATIC takes precedence
+	# and frugen will be built fully statically
+	if (JSON_STATIC AND NOT BINARY_STATIC)
 		find_library(JSON_LIB libjson-c.a)
-	else (JSON_STATIC)
+	else()
 		find_library(JSON_LIB json-c)
-	endif (JSON_STATIC)
+	endif()
 endif (ENABLE_JSON)
 
 # target for frugen
@@ -88,6 +93,7 @@ if(JSON_LIB)
 endif(JSON_LIB)
 add_executable(frugen ${frugen_SOURCES})
 list(APPEND ALL_TARGETS "frugen")
+
 if(BINARY_STATIC)
   target_link_libraries(frugen fru-static -static)
 elseif(NOT BUILD_SHARED_LIB)
