@@ -1,0 +1,49 @@
+when:
+  branch: [master]
+  event: [push, pull_request]
+
+matrix:
+  Ubuntu:
+    - jammy
+    - focal
+
+variables:
+  - &ubuntu_image 'ubuntu:${Ubuntu}'
+
+clone:
+  - name: git
+    image: woodpeckerci/plugin-git
+    settings:
+      tags: true
+
+steps:
+  prepare:
+    image: *ubuntu_image
+    # this step gets ran on "master" and "dev" branch.
+    # also runs on pull requests targeting these branch.
+    commands: >
+      # Install build dependencies / prerequisites
+
+      apt update
+
+      DEBIAN_FRONTEND=noninteractive
+      apt-get -y install
+      git
+      gcc
+      make
+      binutils
+      cmake
+      libjson-c-dev
+      doxygen
+
+      # Run the build.
+
+      mkdir build
+
+      cd build
+
+      cmake ..
+
+      make
+
+      make docs
