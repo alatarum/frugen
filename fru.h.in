@@ -419,14 +419,14 @@ static inline void *add_generic_reclist(void *genlist_ptr, size_t rec_size)
 	struct genlist_s {
 		void *rec; /* A pointer to the field or NULL if not initialized */
 		void *next; /* The next record in the list or NULL if last */
-	} *rec, **reclist = genlist_ptr, *reclist_ptr = *reclist;
+	} *rec, **reclist = (struct genlist_s **) genlist_ptr, *reclist_ptr = *reclist;
 
 	if (!genlist_ptr) {
 		errno = EFAULT;
 		return NULL;
 	}
 
-	rec = calloc(1, rec_size);
+	rec = (struct genlist_s *) calloc(1, rec_size);
 	if(!rec) return NULL;
 
 	// If the reclist is empty, update it
@@ -435,7 +435,7 @@ static inline void *add_generic_reclist(void *genlist_ptr, size_t rec_size)
 	} else {
 		// If the reclist is not empty, find the last entry and append the new one as next
 		while(reclist_ptr->next)
-			reclist_ptr = reclist_ptr->next;
+			reclist_ptr = (struct genlist_s *) reclist_ptr->next;
 
 		reclist_ptr->next = rec;
 	}
@@ -458,7 +458,7 @@ static inline void *add_generic_reclist(void *genlist_ptr, size_t rec_size)
  */
 static inline void *find_rec(void *reclist, size_t n)
 {
-	fru_reclist_t *rl = reclist;
+	fru_reclist_t *rl = (fru_reclist_t *) reclist;
 
 	for (size_t i = 1; i != n && rl; rl = rl->next, i++);
 
