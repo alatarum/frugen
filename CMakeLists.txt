@@ -63,18 +63,35 @@ set(DOXY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/docs")
 add_documentation(docs Doxyfile)
 
 # build libfru
+set(libfru_SOURCES
+	fru.c
+	fru-errno.c
+)
+set(libfru_HEADERS
+	${CMAKE_CURRENT_BINARY_DIR}/fru.h
+)
 if(BUILD_SHARED_LIB)
-	add_library(fru-shared SHARED fru-errno.c fru.c)
+	add_library(fru-shared SHARED ${libfru_SOURCES} ${libfru_HEADERS})
+	add_library(frugen::fru-shared ALIAS fru-shared)
+	target_include_directories(fru-shared PUBLIC
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+		$<INSTALL_INTERFACE:include>
+	)
 	set_target_properties(fru-shared PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
 	set_target_properties(fru-shared PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
-
-	list(APPEND ALL_TARGETS "fru-shared")
+	set_target_properties(fru-shared PROPERTIES PUBLIC_HEADER "${libfru_HEADERS}")
+	list(APPEND LIB_TARGETS "fru-shared")
 endif(BUILD_SHARED_LIB)
-
 if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
-	add_library(fru-static STATIC fru-errno.c fru.c)
+	add_library(fru-static STATIC ${libfru_SOURCES} ${libfru_HEADERS})
+	add_library(frugen::fru-static ALIAS fru-static)
+	target_include_directories(fru-static PUBLIC
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+		$<INSTALL_INTERFACE:include>
+	)
 	set_target_properties(fru-static PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
-	list(APPEND ALL_TARGETS "fru-static")
+	set_target_properties(fru-static PROPERTIES PUBLIC_HEADER "${libfru_HEADERS}")
+	list(APPEND LIB_TARGETS "fru-static")
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
 # target for frugen
@@ -84,15 +101,16 @@ if(ENABLE_JSON)
 	list(APPEND frugen_SOURCES frugen-json.c)
 endif(ENABLE_JSON)
 add_executable(frugen ${frugen_SOURCES})
-list(APPEND ALL_TARGETS "frugen")
+list(APPEND ALL_TARGETS ${LIB_TARGETS} "frugen")
 
 if(BINARY_STATIC)
-	target_link_libraries(frugen fru-static -static)
-elseif(NOT BUILD_SHARED_LIB)
-	target_link_libraries(frugen fru-static)
-else(BINARY_STATIC)
-	target_link_libraries(frugen fru-shared)
+	target_link_libraries(frugen -static)
 endif(BINARY_STATIC)
+if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
+	target_link_libraries(frugen fru-static)
+else(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
+	target_link_libraries(frugen fru-shared)
+endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
 if(ENABLE_JSON)
 	find_package(json-c CONFIG REQUIRED)
@@ -107,18 +125,24 @@ else(ENABLE_JSON)
 	message (WARNING "JSON library support *disabled*!")
 endif(ENABLE_JSON)
 
-# set additional params
-foreach(TARGET IN LISTS ALL_TARGETS)
-	target_include_directories(${TARGET} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
-	# To make frugen 32-bit, set BINARY_32BIT or use an external toolchain file
-	if(BINARY_32BIT)
+# To make frugen 32-bit, set BINARY_32BIT or use an external toolchain file
+if(BINARY_32BIT)
+	foreach(TARGET IN LISTS ALL_TARGETS)
 		set_target_properties(${TARGET} PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
-	endif(BINARY_32BIT)
-endforeach()
+	endforeach()
+endif(BINARY_32BIT)
 
 # install targets
 install(TARGETS frugen RUNTIME DESTINATION bin)
-if(BUILD_SHARED_LIB)
-	install(TARGETS fru-shared DESTINATION lib)
-	install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fru.h DESTINATION include)
-endif(BUILD_SHARED_LIB)
+install(TARGETS ${LIB_TARGETS}
+	EXPORT ${PROJECT_NAME}-targets
+	PUBLIC_HEADER DESTINATION include
+	ARCHIVE DESTINATION lib
+	LIBRARY DESTINATION lib
+	RUNTIME DESTINATION bin
+)
+install(EXPORT ${PROJECT_NAME}-targets
+	NAMESPACE ${PROJECT_NAME}::
+	FILE ${PROJECT_NAME}-config.cmake
+	DESTINATION lib/cmake/${PROJECT_NAME}
+)
