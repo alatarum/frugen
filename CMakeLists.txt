@@ -28,7 +28,7 @@ string(REPLACE "v" "" gitver "${gitver}")
 string(REPLACE "-" "." gitver "${gitver}")
 
 # This is the version of the project w/o hash information
-string(REGEX REPLACE "\\.g.*" "" gitver_short "${gitver}")
+string(REGEX REPLACE "((\\.?[0-9]+)+).*" "\\1" gitver_short "${gitver}")
 
 option(BUILD_SHARED_LIB "build shared library" ON)
 option(BINARY_STATIC "link all libs static when compile frugen" OFF)
