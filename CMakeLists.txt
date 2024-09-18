@@ -3,7 +3,12 @@ if(COMMAND cmake_policy)
 	cmake_policy(SET CMP0003 NEW)
 endif(COMMAND cmake_policy)
 
-include("doxygen.cmake")
+# To make frugen 32-bit, set BINARY_32BIT or use an external toolchain file
+option(BINARY_32BIT "compile 32bit version" OFF)
+if(BINARY_32BIT)
+	# Note: this have to go before PROJECT
+	set(CMAKE_C_COMPILER gcc -m32)
+endif(BINARY_32BIT)
 
 execute_process(COMMAND
 	git
@@ -18,8 +23,8 @@ execute_process(COMMAND
 	OUTPUT_VARIABLE
 	gitver
 	ERROR_QUIET
-	OUTPUT_STRIP_TRAILING_WHITESPACE)
-
+	OUTPUT_STRIP_TRAILING_WHITESPACE
+)
 if(NOT res EQUAL 0)
 	set(gitver "v2.0-dirty-orphan")
 endif()
@@ -29,10 +34,10 @@ string(REPLACE "-" "." gitver "${gitver}")
 
 # This is the version of the project w/o hash information
 string(REGEX REPLACE "((\\.?[0-9]+)+).*" "\\1" gitver_short "${gitver}")
+project(frugen VERSION ${gitver_short} LANGUAGES C)
 
 option(BUILD_SHARED_LIB "build shared library" ON)
 option(BINARY_STATIC "link all libs static when compile frugen" OFF)
-option(BINARY_32BIT "compile 32bit version" OFF)
 option(ENABLE_JSON "enable JSON support" ON)
 option(JSON_STATIC "link json-c library statically" OFF)
 option(DEBUG_OUTPUT "show extra debug output" OFF)
@@ -51,10 +56,11 @@ if(DEBUG_OUTPUT)
 	add_definitions(-DDEBUG)
 endif(DEBUG_OUTPUT)
 
-project(frugen VERSION ${gitver_short} LANGUAGES C)
 add_definitions(-DVERSION="${gitver}")
 
 configure_file(fru.h.in fru.h @ONLY)
+
+include("doxygen.cmake")
 set(DOXY_PROJECT_NUMBER "${gitver}")
 set(DOXY_OUTPUT_LANGUAGE "English")
 set(DOXY_INPUT ${PROJECT_SOURCE_DIR})
@@ -109,10 +115,6 @@ endif(ENABLE_JSON)
 # set additional params
 foreach(TARGET IN LISTS ALL_TARGETS)
 	target_include_directories(${TARGET} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
-	# To make frugen 32-bit, set BINARY_32BIT or use an external toolchain file
-	if(BINARY_32BIT)
-		set_target_properties(${TARGET} PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
-	endif(BINARY_32BIT)
 endforeach()
 
 # install targets
