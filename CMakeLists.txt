@@ -1,9 +1,8 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.15)
 if(COMMAND cmake_policy)
 	cmake_policy(SET CMP0003 NEW)
+	cmake_policy(SET CMP0077 NEW)
 endif(COMMAND cmake_policy)
-
-include("doxygen.cmake")
 
 execute_process(COMMAND
 	git
@@ -18,8 +17,8 @@ execute_process(COMMAND
 	OUTPUT_VARIABLE
 	gitver
 	ERROR_QUIET
-	OUTPUT_STRIP_TRAILING_WHITESPACE)
-
+	OUTPUT_STRIP_TRAILING_WHITESPACE
+)
 if(NOT res EQUAL 0)
 	set(gitver "v2.0-dirty-orphan")
 endif()
@@ -29,6 +28,7 @@ string(REPLACE "-" "." gitver "${gitver}")
 
 # This is the version of the project w/o hash information
 string(REGEX REPLACE "((\\.?[0-9]+)+).*" "\\1" gitver_short "${gitver}")
+project(frugen VERSION ${gitver_short} LANGUAGES C)
 
 option(BUILD_SHARED_LIB "build shared library" ON)
 option(BINARY_STATIC "link all libs static when compile frugen" OFF)
@@ -51,10 +51,11 @@ if(DEBUG_OUTPUT)
 	add_definitions(-DDEBUG)
 endif(DEBUG_OUTPUT)
 
-project(frugen VERSION ${gitver_short} LANGUAGES C)
 add_definitions(-DVERSION="${gitver}")
 
 configure_file(fru.h.in fru.h @ONLY)
+
+include("doxygen.cmake")
 set(DOXY_PROJECT_NUMBER "${gitver}")
 set(DOXY_OUTPUT_LANGUAGE "English")
 set(DOXY_INPUT ${PROJECT_SOURCE_DIR})
