@@ -71,32 +71,17 @@ if(BUILD_SHARED_LIB)
 endif(BUILD_SHARED_LIB)
 
 if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
-	#set(JSON_STATIC ON)
 	add_library(fru-static STATIC fru-errno.c fru.c)
 	set_target_properties(fru-static PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
 	list(APPEND ALL_TARGETS "fru-static")
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
-unset (JSON_LIB CACHE)
-if (ENABLE_JSON)
-	# Look for JSON library.
-
-	# Prevent some weird cmake 3.13 behavior when both
-	# options are specified. BINARY_STATIC takes precedence
-	# and frugen will be built fully statically
-	if (JSON_STATIC AND NOT BINARY_STATIC)
-		find_library(JSON_LIB libjson-c.a)
-	else()
-		find_library(JSON_LIB json-c)
-	endif()
-endif (ENABLE_JSON)
-
 # target for frugen
 set(frugen_SOURCES)
 list(APPEND frugen_SOURCES frugen.c)
-if(JSON_LIB)
+if(ENABLE_JSON)
 	list(APPEND frugen_SOURCES frugen-json.c)
-endif(JSON_LIB)
+endif(ENABLE_JSON)
 add_executable(frugen ${frugen_SOURCES})
 list(APPEND ALL_TARGETS "frugen")
 
@@ -108,17 +93,18 @@ else(BINARY_STATIC)
 	target_link_libraries(frugen fru-shared)
 endif(BINARY_STATIC)
 
-if(JSON_LIB)
-	message (STATUS "Using JSON Library found at " ${JSON_LIB})
+if(ENABLE_JSON)
+	find_package(json-c CONFIG REQUIRED)
+	message (STATUS "Using JSON Library found at " ${json-c_DIR})
 	add_definitions(-D__HAS_JSON__)
-	if(BINARY_STATIC)
-		target_link_libraries(frugen ${JSON_LIB} -static)
-	else(BINARY_STATIC)
-		target_link_libraries(frugen ${JSON_LIB})
-	endif(BINARY_STATIC)
-else(JSON_LIB)
-	message (WARNING "JSON library *NOT* found. JSON support *disabled*!")
-endif(JSON_LIB)
+	if(JSON_STATIC OR BINARY_STATIC)
+		target_link_libraries(frugen json-c::json-c-static)
+	else(JSON_STATIC OR BINARY_STATIC)
+		target_link_libraries(frugen json-c::json-c)
+	endif(JSON_STATIC OR BINARY_STATIC)
+else(ENABLE_JSON)
+	message (WARNING "JSON library support *disabled*!")
+endif(ENABLE_JSON)
 
 # set additional params
 foreach(TARGET IN LISTS ALL_TARGETS)
