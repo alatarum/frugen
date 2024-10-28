@@ -1,7 +1,9 @@
 /** @file
  *  @brief FRU generator utility header file
  *
- *  Copyright (C) 2016-2023 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *  @copyright
+ *  Copyright (C) 2016-2024 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 #pragma once
@@ -20,17 +22,6 @@ typedef enum {
 	FRUGEN_FMT_TEXTOUT, /* Output format only */
 	FRUGEN_FMT_LAST = FRUGEN_FMT_TEXTOUT
 } frugen_format_t;
-
-struct frugen_fruinfo_s {
-	fru_exploded_t fru;
-	fru_area_t areas[FRU_MAX_AREAS];
-	bool has_chassis;
-	bool has_board;
-	bool has_bdate;
-	bool has_product;
-	bool has_internal;
-	bool has_multirec;
-};
 
 struct frugen_config_s {
 	frugen_format_t format;
@@ -98,7 +89,7 @@ void tv_to_datestr(char *datestr, const struct timeval *tv);
  *
  * The argument format is expected to be:
  *
- * [<encoding>:]<area>.<field>=<value>
+ * `[<encoding>:]<area>.<field>=<value>`
  *
  * Works for string fields only (i.e. not chassis.type or board.date)
  *
@@ -135,12 +126,28 @@ fieldopt_t arg_to_fieldopt(char *arg);
  * @returns The ID of the subtype as per Table 18-6 of IPMI FRU Spec
  * @retval 1..7 The subtype ID
  */
-fru_mr_mgmt_type_t fru_mr_mgmt_type_by_name(const char *name);
+fru_mr_mgmt_type_t frugen_mr_mgmt_type_by_name(const char *name);
 
 /**
  * Get Multirecord Area Record name by its type
  *
- * Reverse of fru_mr_mgmt_type_by_name()
+ * Reverse of frugen_mr_mgmt_type_by_name()
  */
-const char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type);
+const char * frugen_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type);
+
+/**
+ * Find a field encoding type by its short name
+ *
+ * Takes a short name of the encoding type and returns the ID as per Section 13
+ *
+ * @param[in] name   The short name of the encoding type
+ * @returns The encoding type as per Section 13 of IPMI FRU Spec
+ * @retval 1..4 The encoding type
+ * @retval FIELD_TYPE_UNKNOWN Type name is not recognized
+ */
+field_type_t frugen_enc_type_by_name(const char *name);
+/**
+ * The opposite of frugen_enc_type_by_name()
+ */
+const char * frugen_enc_name_by_type(field_type_t type);
 

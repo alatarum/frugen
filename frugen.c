@@ -1,7 +1,9 @@
 /** @file
  *  @brief FRU generator utility
- *
+ * 
+ *  @copyright
  *  Copyright (C) 2016-2024 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 #ifndef VERSION
@@ -18,16 +20,13 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <time.h>
 #include <limits.h>
 #include <ctype.h>
-#include "fru.h"
 #include "fru-errno.h"
 #include "frugen.h"
 #include "smbios.h"
@@ -38,7 +37,17 @@
 
 volatile int debug_level = 0;
 
-static const char* fru_mr_mgmt_name[FRU_MR_MGMT_MAX] = {
+static
+const char * frugen_enc_type_names[TOTAL_FIELD_TYPES] = {
+	[FIELD_TYPE_AUTO] = "auto",
+	[FIELD_TYPE_BINARY] = "binary", /* For input data that is hex string [0-9A-Fa-f] */
+	[FIELD_TYPE_BCDPLUS] = "bcdplus",
+	[FIELD_TYPE_6BITASCII] = "6bitascii",
+	[FIELD_TYPE_TEXT] = "text"
+};
+
+static
+const char* frugen_mr_mgmt_name[FRU_MR_MGMT_MAX] = {
 	[MGMT_TYPENAME_ID(SYS_URL)] = "surl",
 	[MGMT_TYPENAME_ID(SYS_NAME)] = "sname",
 	[MGMT_TYPENAME_ID(SYS_PING)] = "spingaddr",
@@ -48,7 +57,26 @@ static const char* fru_mr_mgmt_name[FRU_MR_MGMT_MAX] = {
 	[MGMT_TYPENAME_ID(SYS_UUID)] = "uuid"
 };
 
-fru_mr_mgmt_type_t fru_mr_mgmt_type_by_name(const char *name)
+const char * frugen_enc_name_by_type(field_type_t type)
+{
+
+	if (type < FIELD_TYPE_AUTO || type >= TOTAL_FIELD_TYPES) {
+		return "undefined";
+	}
+
+	return frugen_enc_type_names[type];
+}
+
+field_type_t frugen_enc_type_by_name(const char *name)
+{
+	for (field_type_t i = 0; i < TOTAL_FIELD_TYPES; i++) {
+		if (!strcmp(name, frugen_enc_type_names[i]))
+			return i;
+	}
+	return FIELD_TYPE_UNKNOWN;
+}
+
+fru_mr_mgmt_type_t frugen_mr_mgmt_type_by_name(const char *name)
 {
 	off_t i;
 
@@ -56,18 +84,18 @@ fru_mr_mgmt_type_t fru_mr_mgmt_type_by_name(const char *name)
 		fatal("FRU MR Management Record type not provided");
 
 	for (i = MGMT_TYPENAME_ID(MIN); i <= MGMT_TYPENAME_ID(MAX); i++) {
-		if (!strcmp(fru_mr_mgmt_name[i], name))
+		if (!strcmp(frugen_mr_mgmt_name[i], name))
 			return i + FRU_MR_MGMT_MIN;
 	}
 	fatal("Invalid FRU MR Management Record type '%s'", name);
 }
 
-const char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
+const char * frugen_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
 {
 	if (type < FRU_MR_MGMT_MIN || type > FRU_MR_MGMT_MAX) {
 		fatal("FRU MR Management Record type %d is out of range", type);
 	}
-	return fru_mr_mgmt_name[MGMT_TYPE_ID(type)];
+	return frugen_mr_mgmt_name[MGMT_TYPE_ID(type)];
 }
 
 static
@@ -207,9 +235,9 @@ fieldopt_t arg_to_fieldopt(char *arg)
 		debug(3, "Encoding specifier found");
 		opt.type = FIELD_TYPE_AUTO;
 		if (p != arg) {
-			opt.type = fru_enc_type_by_name(arg);
+			opt.type = frugen_enc_type_by_name(arg);
 			debug(2, "Encoding requested is '%s'", arg);
-			debug(2, "Encoding parsed is '%s'", fru_enc_name_by_type(opt.type));
+			debug(2, "Encoding parsed is '%s'", frugen_enc_name_by_type(opt.type));
 			if (FIELD_TYPE_UNKNOWN == opt.type) {
 				fatal("Field encoding type '%s' is not supported", arg);
 			}
@@ -227,12 +255,12 @@ fieldopt_t arg_to_fieldopt(char *arg)
 	}
 	*p = 0;
 
-	for (opt.area = FRU_MAX_AREAS - 1; opt.area > FRU_AREA_NOT_PRESENT; opt.area--) {
+	for (opt.area = FRU_MAX_AREAS - 1; opt.area >= FRU_MIN_AREA; opt.area--) {
 		if (!area_type[opt.area]) continue;
 		if (!strcmp(arg, area_type[opt.area]))
 			break;
 	}
-	if (opt.area == FRU_AREA_NOT_PRESENT) {
+	if (opt.area <= FRU_MIN_AREA) {
 		fatal("Area name '%s' is not valid", arg);
 	}
 	arg = p + 1;
@@ -289,133 +317,24 @@ fieldopt_t arg_to_fieldopt(char *arg)
 	return opt;
 }
 
-void load_from_binary_file(const char *fname,
-                           const struct frugen_config_s *config,
-                           struct frugen_fruinfo_s *info)
-{
-	assert(fname);
-	size_t mr_size;
-	int fd = open(fname, O_RDONLY);
-	debug(2, "Data format is BINARY");
-	if (fd < 0) {
-		fatal("Failed to open file: %m");
-	}
-
-	struct stat statbuf = {0};
-	if (fstat(fd, &statbuf)) {
-		fatal("Failed to get file properties: %m");
-	}
-	if (statbuf.st_size > MAX_FILE_SIZE) {
-		fatal("File too large");
-	}
-
-	uint8_t *buffer = calloc(1, statbuf.st_size);
-	if (buffer == NULL) {
-		fatal("Cannot allocate buffer");
-	}
-
-	debug(2, "Reading the template file of size %lu...", statbuf.st_size);
-	if (read(fd, buffer, statbuf.st_size) != statbuf.st_size) {
-		fatal("Cannot read file");
-	}
-	close(fd);
-
-	errno = 0;
-	size_t iu_size;
-	fru_internal_use_area_t *internal_area =
-		find_fru_internal_use_area(buffer, &iu_size, statbuf.st_size,
-								   config->flags);
-	if (internal_area) {
-		debug(2, "Found an internal use area of size %zd", iu_size);
-
-		if (!fru_decode_internal_use_area(internal_area, iu_size,
-										  &info->fru.internal_use,
-										  config->flags))
-		{
-			fatal("Failed to decode interal use area");
-		}
-
-		debug(2, "Internal use area: %s", info->fru.internal_use);
-		info->has_internal = true;
-	}
-	else {
-		debug(2, "No internal use area found: %s", fru_strerr(fru_errno));
-	}
-
-	errno = 0;
-	fru_chassis_area_t *chassis_area =
-		find_fru_chassis_area(buffer, statbuf.st_size, config->flags);
-	if (chassis_area) {
-		debug(2, "Found a chassis area");
-		if (!fru_decode_chassis_info(chassis_area, &info->fru.chassis))
-			fatal("Failed to decode chassis");
-		info->has_chassis = true;
-	}
-	else {
-		debug(2, "No chassis area found: %s", fru_strerr(fru_errno));
-	}
-
-	errno = 0;
-	fru_board_area_t *board_area =
-		find_fru_board_area(buffer, statbuf.st_size, config->flags);
-	if (board_area) {
-		debug(2, "Found a board area");
-		if (!fru_decode_board_info(board_area, &info->fru.board))
-			fatal("Failed to decode board");
-		info->has_board = true;
-	}
-	else {
-		debug(2, "No board area found");
-	}
-
-	errno = 0;
-	fru_product_area_t *product_area =
-		find_fru_product_area(buffer, statbuf.st_size, config->flags);
-	if (product_area) {
-		debug(2, "Found a product area");
-		if (!fru_decode_product_info(product_area, &info->fru.product))
-			fatal("Failed to decode product");
-		info->has_product = true;
-	}
-	else {
-		debug(2, "No product area found");
-	}
-
-	errno = 0;
-	mr_size = 0;
-	fru_mr_area_t *mr_area =
-		find_fru_mr_area(buffer, &mr_size, statbuf.st_size, config->flags);
-	if (mr_area) {
-		int rec_cnt;
-		debug(2, "Found a multirecord area of size %zd", mr_size);
-		rec_cnt = fru_decode_mr_area(mr_area, &info->fru.mr_reclist,
-									 mr_size, config->flags);
-		if (0 > rec_cnt)
-			fatal("Failed to decode multirecord area");
-		debug(2, "Loaded %d records from the multirecord area", rec_cnt);
-		info->has_multirec = true;
-	}
-	else {
-		debug(2, "No multirecord area found: %s", fru_strerr(fru_errno));
-	}
-
-	free(buffer);
-}
-
 void load_fromfile(const char *fname,
                    const struct frugen_config_s *config,
-                   struct frugen_fruinfo_s *info)
+                   fru_t * fru)
 {
 	assert(fname);
 
 	switch(config->format) {
 #ifdef __HAS_JSON__
 	case FRUGEN_FMT_JSON:
-		load_from_json_file(fname, info);
+		// This call exits on failures
+		fru = frugen_loadfile_json(&init_fru, fname);
 		break;
 #endif /* __HAS_JSON__ */
 	case FRUGEN_FMT_BINARY:
-		load_from_binary_file(fname, config, info);
+		fru = fru_loadfile(&init_fru, fname, config->flags);
+		if (!fru) {
+			fatal("Couldn't load FRU file: %s\n", fru_strerr(fru_errno));
+		}
 		break;
 	default:
 		fatal("Please specify the input file format");
@@ -463,15 +382,15 @@ void save_to_text_file(FILE **fp, const char *fname,
 		fputs("Chassis\n", *fp);
 		fprintf(*fp, "\ttype: %u\n", info->fru.chassis.type);
 		fprintf(*fp, "\tpn(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.chassis.pn.type),
+		             frugen_enc_name_by_type(info->fru.chassis.pn.type),
 		             info->fru.chassis.pn.val);
 		fprintf(*fp, "\tserial(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.chassis.serial.type),
+		             frugen_enc_name_by_type(info->fru.chassis.serial.type),
 		             info->fru.chassis.serial.val);
 		fru_reclist_t *next = info->fru.chassis.cust;
 		while (next != NULL) {
 			fprintf(*fp, "\tcustom(%s): %s\n",
-			             fru_enc_name_by_type(next->rec->type),
+			             frugen_enc_name_by_type(next->rec->type),
 			             next->rec->val);
 			next = next->next;
 		}
@@ -481,30 +400,30 @@ void save_to_text_file(FILE **fp, const char *fname,
 		fputs("Product\n", *fp);
 		fprintf(*fp, "\tlang: %u\n", info->fru.product.lang);
 		fprintf(*fp, "\tmfg(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.product.mfg.type),
+		             frugen_enc_name_by_type(info->fru.product.mfg.type),
 		             info->fru.product.mfg.val);
 		fprintf(*fp, "\tpname(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.product.pname.type),
+		             frugen_enc_name_by_type(info->fru.product.pname.type),
 		             info->fru.product.pname.val);
 		fprintf(*fp, "\tserial(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.product.serial.type),
+		             frugen_enc_name_by_type(info->fru.product.serial.type),
 		             info->fru.product.serial.val);
 		fprintf(*fp, "\tpn(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.product.pn.type),
+		             frugen_enc_name_by_type(info->fru.product.pn.type),
 		             info->fru.product.pn.val);
 		fprintf(*fp, "\tver(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.product.ver.type),
+		             frugen_enc_name_by_type(info->fru.product.ver.type),
 		             info->fru.product.ver.val);
 		fprintf(*fp, "\tatag(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.product.atag.type),
+		             frugen_enc_name_by_type(info->fru.product.atag.type),
 		             info->fru.product.atag.val);
 		fprintf(*fp, "\tfile(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.product.file.type),
+		             frugen_enc_name_by_type(info->fru.product.file.type),
 		             info->fru.product.file.val);
 		fru_reclist_t *next = info->fru.product.cust;
 		while (next != NULL) {
 			fprintf(*fp, "\tcustom(%s): %s\n",
-			             fru_enc_name_by_type(next->rec->type),
+			             frugen_enc_name_by_type(next->rec->type),
 			             next->rec->val);
 			next = next->next;
 		}
@@ -518,24 +437,24 @@ void save_to_text_file(FILE **fp, const char *fname,
 		fprintf(*fp, "\tlang: %u\n", info->fru.board.lang);
 		fprintf(*fp, "\tdate: %s\n", timebuf);
 		fprintf(*fp, "\tmfg(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.board.mfg.type),
+		             frugen_enc_name_by_type(info->fru.board.mfg.type),
 		             info->fru.board.mfg.val);
 		fprintf(*fp, "\tpname(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.board.pname.type),
+		             frugen_enc_name_by_type(info->fru.board.pname.type),
 		             info->fru.board.pname.val);
 		fprintf(*fp, "\tserial(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.board.serial.type),
+		             frugen_enc_name_by_type(info->fru.board.serial.type),
 		             info->fru.board.serial.val);
 		fprintf(*fp, "\tpn(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.board.pn.type),
+		             frugen_enc_name_by_type(info->fru.board.pn.type),
 		             info->fru.board.pn.val);
 		fprintf(*fp, "\tfile(%s): %s\n",
-		             fru_enc_name_by_type(info->fru.board.file.type),
+		             frugen_enc_name_by_type(info->fru.board.file.type),
 		             info->fru.board.file.val);
 		fru_reclist_t *next = info->fru.board.cust;
 		while (next != NULL) {
 			fprintf(*fp, "\tcustom(%s): %s\n",
-			             fru_enc_name_by_type(next->rec->type),
+			             frugen_enc_name_by_type(next->rec->type),
 			             next->rec->val);
 			next = next->next;
 		}
@@ -709,28 +628,16 @@ int main(int argc, char *argv[])
 	bool single_option_help = false;
 	fieldopt_t fieldopt = {};
 
-	struct frugen_fruinfo_s fruinfo = {
-		.fru = {
-			.internal_use = NULL,
-			.chassis      = { .type = SMBIOS_CHASSIS_UNKNOWN },
-			.board        = { .lang = LANG_ENGLISH },
-			.product      = { .lang = LANG_ENGLISH },
-			.mr_reclist   = NULL,
-		},
-		.areas = {
-			{ .atype = FRU_INTERNAL_USE },
-			{ .atype = FRU_CHASSIS_INFO },
-			{ .atype = FRU_BOARD_INFO, },
-			{ .atype = FRU_PRODUCT_INFO, },
-			{ .atype = FRU_MULTIRECORD }
-		},
-		.has_chassis  = false,
-		.has_board    = false,
-		.has_bdate    = false,
-		.has_product  = false,
-		.has_internal = false,
-		.has_multirec = false,
+	/*
+	 * Declare a decoded FRU file structure instance,
+	 * set some defaults that are not zeroes.
+	 */
+	fru_t init_fru = {
+		.chassis    = { .type = SMBIOS_CHASSIS_UNKNOWN },
+		.board      = { .lang = LANG_ENGLISH },
+		.product    = { .lang = LANG_ENGLISH },
 	};
+	fru_t * fru = NULL;
 
 	const char *fname = NULL;
 
@@ -968,7 +875,7 @@ int main(int argc, char *argv[])
 				config.format = FRUGEN_FMT_JSON;
 				debug(1, "Using JSON input format");
 				debug(2, "Will load FRU information from file %s", optarg);
-				load_fromfile(optarg, &config, &fruinfo);
+				load_fromfile(optarg, &config, &fru);
 				break;
 #endif
 
@@ -976,7 +883,7 @@ int main(int argc, char *argv[])
 				config.format = FRUGEN_FMT_BINARY;
 				debug(1, "Using RAW binary input format");
 				debug(2, "Will load FRU information from file %s", optarg);
-				load_fromfile(optarg, &config, &fruinfo);
+				load_fromfile(optarg, &config, &fru);
 				break;
 
 			case 'o': { // out-format
@@ -1008,35 +915,30 @@ int main(int argc, char *argv[])
 				 * for the sake of data/code separation */
 				decoded_field_t * const field[FRU_MAX_AREAS][FRU_MAX_FIELD_COUNT] = {
 					[FRU_CHASSIS_INFO] = {
-						[FRU_CHASSIS_PARTNO] = &fruinfo.fru.chassis.pn,
-						[FRU_CHASSIS_SERIAL] = &fruinfo.fru.chassis.serial,
+						[FRU_CHASSIS_PARTNO] = &fru->chassis.pn,
+						[FRU_CHASSIS_SERIAL] = &fru->chassis.serial,
 					},
 					[FRU_BOARD_INFO] = {
-						[FRU_BOARD_MFG] = &fruinfo.fru.board.mfg,
-						[FRU_BOARD_PRODNAME] = &fruinfo.fru.board.pname,
-						[FRU_BOARD_SERIAL] = &fruinfo.fru.board.serial,
-						[FRU_BOARD_PARTNO] = &fruinfo.fru.board.pn,
-						[FRU_BOARD_FILE] = &fruinfo.fru.board.file,
+						[FRU_BOARD_MFG] = &fru->board.mfg,
+						[FRU_BOARD_PRODNAME] = &fru->board.pname,
+						[FRU_BOARD_SERIAL] = &fru->board.serial,
+						[FRU_BOARD_PARTNO] = &fru->board.pn,
+						[FRU_BOARD_FILE] = &fru->board.file,
 					},
 					[FRU_PRODUCT_INFO] = {
-						[FRU_PROD_MFG] = &fruinfo.fru.product.mfg,
-						[FRU_PROD_NAME] = &fruinfo.fru.product.pname,
-						[FRU_PROD_MODELPN] = &fruinfo.fru.product.pn,
-						[FRU_PROD_VERSION] = &fruinfo.fru.product.ver,
-						[FRU_PROD_SERIAL] = &fruinfo.fru.product.serial,
-						[FRU_PROD_ASSET] = &fruinfo.fru.product.atag,
-						[FRU_PROD_FILE] = &fruinfo.fru.product.file,
+						[FRU_PROD_MFG] = &fru->product.mfg,
+						[FRU_PROD_NAME] = &fru->product.pname,
+						[FRU_PROD_MODELPN] = &fru->product.pn,
+						[FRU_PROD_VERSION] = &fru->product.ver,
+						[FRU_PROD_SERIAL] = &fru->product.serial,
+						[FRU_PROD_ASSET] = &fru->product.atag,
+						[FRU_PROD_FILE] = &fru->product.file,
 					},
 				};
 				fru_reclist_t ** const custom[FRU_MAX_AREAS] = {
-					[FRU_CHASSIS_INFO] = &fruinfo.fru.chassis.cust,
-					[FRU_BOARD_INFO] = &fruinfo.fru.board.cust,
-					[FRU_PRODUCT_INFO] = &fruinfo.fru.product.cust,
-				};
-				bool * const fru_has[FRU_MAX_AREAS] = {
-					[FRU_CHASSIS_INFO] = &fruinfo.has_chassis,
-					[FRU_BOARD_INFO] = &fruinfo.has_board,
-					[FRU_PRODUCT_INFO] = &fruinfo.has_product,
+					[FRU_CHASSIS_INFO] = &fru->chassis.cust,
+					[FRU_BOARD_INFO] = &fru->board.cust,
+					[FRU_PRODUCT_INFO] = &fru->product.cust,
 				};
 
 				/* Now do the actual job and set data in the appropriate locations */
@@ -1044,7 +946,7 @@ int main(int argc, char *argv[])
 				if (fieldopt.field.index != FRU_FIELD_CUSTOM) {
 					fru_loadfield(field[fieldopt.area][fieldopt.field.index],
 					              fieldopt.value, fieldopt.type);
-					*fru_has[fieldopt.area] = true;
+					fru->present[fieldopt.area] = true;
 				}
 				else {
 					fru_reclist_t *cust_rec;
@@ -1061,7 +963,7 @@ int main(int argc, char *argv[])
 					else {
 						decoded_field_t *field;
 						debug(3, "Adding a custom field from argument [%s]", optarg);
-						cust_rec = add_reclist(custom[fieldopt.area]);
+						cust_rec = fru__add_reclist_entry(custom[fieldopt.area], RECLIST_TAIL);
 						if (!cust_rec) {
 							fatal("Failed to allocate a custom record list entry");
 						}
@@ -1072,7 +974,7 @@ int main(int argc, char *argv[])
 						cust_rec->rec = field;
 					}
 					fru_loadfield(cust_rec->rec, fieldopt.value, fieldopt.type);
-					*fru_has[fieldopt.area] = true;
+					fru->present[fieldopt.area] = true;
 				}
 				break;
 			}
@@ -1104,7 +1006,8 @@ int main(int argc, char *argv[])
 		}
 
 		if (is_mr_record) {
-			fru_mr_reclist_t *mr_reclist_tail = add_reclist(&fruinfo.fru.mr_reclist);
+			fru_mr_reclist_t *mr_reclist_tail =
+				fru__add_reclist_entry(&fruinfo.fru.mr_reclist, RECLIST_TAIL);
 			if (!mr_reclist_tail) {
 				fatal("Failed to allocate multirecord area list");
 			}

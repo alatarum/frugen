@@ -1,7 +1,9 @@
 /** @file
  *  @brief FRU generator utility JSON support code
  *
- *  Copyright (C) 2016-2023 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *  @copyright
+ *  Copyright (C) 2016-2024 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 
@@ -9,11 +11,9 @@
 #include <time.h>
 #include <limits.h>
 #include <stdbool.h>
-#include <unistd.h>
 
 #include <json-c/json.h>
 
-#include "fru.h"
 #include "fru-errno.h"
 #include "frugen-json.h"
 
@@ -49,7 +49,7 @@ json_object_to_fd(int fd, struct json_object *obj, int flags)
 static
 bool json_fill_fru_area_fields(json_object *jso, int count,
                                const char *fieldnames[],
-                               decoded_field_t *fields[])
+                               fru_field_t *fields[])
 {
 	int i;
 	json_object *jsfield;
@@ -64,7 +64,7 @@ bool json_fill_fru_area_fields(json_object *jso, int count,
 				const char *type = json_object_get_string(typefield);
 				const char *val = json_object_get_string(valfield);
 				field_type_t field_type;
-				field_type = fru_enc_type_by_name(type);
+				field_type = frugen_enc_type_by_name(type);
 				if (FIELD_TYPE_UNKNOWN == field_type) {
 					debug(1, "Unknown type %s for field '%s'",
 					      type, fieldnames[i]);
@@ -112,7 +112,7 @@ bool json_fill_fru_area_custom(json_object *jso, fru_reclist_t **custom)
 	for (i = 0; i < alen; i++) {
 		const char *type = NULL;
 		const void *data = NULL;
-		decoded_field_t *field = NULL;
+		fru_field_t *field = NULL;
 		json_object *item, *ifield;
 
 		item = json_object_array_get_idx(jsfield, i);
@@ -225,7 +225,7 @@ bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
 			}
 
 			debug(3, "Management record subtype is '%s'", subtype);
-			subtype_id = fru_mr_mgmt_type_by_name(subtype);
+			subtype_id = frugen_mr_mgmt_type_by_name(subtype);
 			if (!subtype_id) {
 				fatal("Management record subtype '%s' is invalid", subtype);
 			}
@@ -454,7 +454,7 @@ STRING_ERR:
 	return -1;
 }
 
-void load_from_json_file(const char *fname, struct frugen_fruinfo_s *info)
+void frugen_loadfile_json(fru_t * fru, const char * fname)
 {
 	json_object *jstree, *jso, *jsfield;
 	json_object_iter iter;
@@ -474,54 +474,51 @@ void load_from_json_file(const char *fname, struct frugen_fruinfo_s *info)
 				debug(2, "Internal use are w/o data, skipping");
 				continue;
 			}
-			len = strlen(data) + 1;
-			info->fru.internal_use = calloc(1, len);
-			if (!info->fru.internal_use)
-				fatal("Failed to allocate a buffer for internal use area");
 
+			if (!fru_set_internal_hexstring(fru, data)) {
+				fatal("Failed to load internal use area: %s",
+				      fru_strerr(fru_errno));
+			}
 
-			/* `data` will be destroyed, can't use it */
-			memmove(info->fru.internal_use, data, len);
-			info->has_internal = true;
 			debug(2, "Internal use area data loaded from JSON");
 			continue;
 		} else if (!strcmp(iter.key, "chassis")) {
 			const char *fieldname[] = { "pn", "serial" };
-			decoded_field_t* field[] = {
-				&info->fru.chassis.pn, &info->fru.chassis.serial
+			fru_field_t * field[] = {
+				&fru->chassis.pn, &fru->chassis.serial
 			};
 			json_object_object_get_ex(jso, "type", &jsfield);
 			if (jsfield) {
-				info->fru.chassis.type = json_object_get_int(jsfield);
+				fru->chassis.type = json_object_get_int(jsfield);
 				debug(2, "Chassis type 0x%02X loaded from JSON",
-				      info->fru.chassis.type);
-				info->has_chassis = true;
+				      fru->chassis.type);
+				fru->present[FRU_CHASSIS_INFO] = true;
 			}
 			/* Now get values for the string fields */
-			info->has_chassis |=
+			fru->present[FRU_CHASSIS_INFO] |=
 				json_fill_fru_area_fields(jso, ARRAY_SZ(field), fieldname,
 				                          field);
-			debug(9, "chassis custom was %p", info->fru.chassis.cust);
-			info->has_chassis |=
-				json_fill_fru_area_custom(jso, &info->fru.chassis.cust);
-			debug(9, "chassis custom now %p", info->fru.chassis.cust);
+			debug(9, "chassis custom was %p", fru->chassis.cust);
+			fru->present[FRU_CHASSIS_INFO] |=
+				json_fill_fru_area_custom(jso, &fru->chassis.cust);
+			debug(9, "chassis custom now %p", fru->chassis.cust);
 		} else if (!strcmp(iter.key, "board")) {
 			const char *fieldname[] = {
 				"mfg", "pname", "pn", "serial", "file"
 			};
-			decoded_field_t *field[] = {
-				&info->fru.board.mfg,
-				&info->fru.board.pname,
-				&info->fru.board.pn,
-				&info->fru.board.serial,
-				&info->fru.board.file
+			fru_field_t *field[] = {
+				&fru->board.mfg,
+				&fru->board.pname,
+				&fru->board.pn,
+				&fru->board.serial,
+				&fru->board.file
 			};
 			/* Get values for non-string fields */
 #if 0 /* TODO: Language support is not implemented yet */
 			json_object_object_get_ex(jso, "lang", &jsfield);
 			if (jsfield) {
-				info->fru.board.lang = json_object_get_int(jsfield);
-				debug(2, "Board language 0x%02X loaded from JSON", info->fru.board.lang);
+				fru->board.lang = json_object_get_int(jsfield);
+				debug(2, "Board language 0x%02X loaded from JSON", fru->board.lang);
 				info->has_board = true;
 			}
 #endif
@@ -529,30 +526,31 @@ void load_from_json_file(const char *fname, struct frugen_fruinfo_s *info)
 			if (jsfield) {
 				const char *date = json_object_get_string(jsfield);
 				debug(2, "Board date '%s' will be loaded from JSON", date);
-				if (!datestr_to_tv(date, &info->fru.board.tv))
+				if (!datestr_to_tv(date, &fru->board.tv))
 					fatal("Invalid board date/time format in JSON file");
-				info->has_board = true;
-				info->has_bdate = true;
+				fru->present[FRU_BOARD_INFO] = true;
+				fru->board.tv_auto = false;
 			}
 			/* Now get values for the string fields */
-			info->has_board |= json_fill_fru_area_fields(jso, ARRAY_SZ(field),
-			                                             fieldname, field);
-			debug(9, "board custom was %p", info->fru.board.cust);
-			info->has_board |= json_fill_fru_area_custom(jso,
-			                                             &info->fru.board.cust);
-			debug(9, "board custom now %p", info->fru.board.cust);
+			fru->present[FRU_BOARD_INFO] |=
+				json_fill_fru_area_fields(jso, ARRAY_SZ(field),
+			                              fieldname, field);
+			debug(9, "board custom was %p", fru->board.cust);
+			fru->present[FRU_BOARD_INFO] |=
+				json_fill_fru_area_custom(jso, &fru->board.cust);
+			debug(9, "board custom now %p", fru->board.cust);
 		} else if (!strcmp(iter.key, "product")) {
 			const char *fieldname[] = {
 				"mfg", "pname", "pn", "ver", "serial", "atag", "file"
 			};
-			decoded_field_t *field[] = {
-				&info->fru.product.mfg,
-				&info->fru.product.pname,
-				&info->fru.product.pn,
-				&info->fru.product.ver,
-				&info->fru.product.serial,
-				&info->fru.product.atag,
-				&info->fru.product.file
+			fru_field_t *field[] = {
+				&fru->product.mfg,
+				&fru->product.pname,
+				&fru->product.pn,
+				&fru->product.ver,
+				&fru->product.serial,
+				&fru->product.atag,
+				&fru->product.file
 			};
 #if 0 /* TODO: Language support is not implemented yet */
 			/* Get values for non-string fields */
@@ -564,15 +562,14 @@ void load_from_json_file(const char *fname, struct frugen_fruinfo_s *info)
 			}
 #endif
 			/* Now get values for the string fields */
-			info->has_product |=
+			fru->present[FRU_PRODUCT_INFO] |=
 				json_fill_fru_area_fields(jso, ARRAY_SZ(field), fieldname,
 				                          field);
-			info->has_product |=
-				json_fill_fru_area_custom(jso, &info->fru.product.cust);
+			fru->present[FRU_PRODUCT_INFO] |=
+				json_fill_fru_area_custom(jso, &fru->product.cust);
 		} else if (!strcmp(iter.key, "multirecord")) {
 			debug(2, "Processing multirecord area records");
-			info->has_multirec |=
-				json_fill_fru_mr_reclist(jso, &info->fru.mr_reclist);
+			json_fill_fru_mr_reclist(fru, jso);
 		}
 	}
 
@@ -598,18 +595,18 @@ void save_to_json_file(FILE **fp, const char *fname,
 	}
 
 	if (info->has_internal) {
-		section = json_object_new_string((char *)info->fru.internal_use);
+		section = json_object_new_string((char *)fru->internal_use);
 		json_object_object_add(json_root, "internal", section);
 	}
 
 	if (info->has_chassis) {
 		section = json_object_new_object();
-		temp_obj = json_object_new_int(info->fru.chassis.type);
+		temp_obj = json_object_new_int(fru->chassis.type);
 		json_object_object_add(section, "type", temp_obj);
-		json_object_add_with_type(section, "pn", info->fru.chassis.pn.val, info->fru.chassis.pn.type);
-		json_object_add_with_type(section, "serial", info->fru.chassis.serial.val, info->fru.chassis.serial.type);
+		json_object_add_with_type(section, "pn", fru->chassis.pn.val, fru->chassis.pn.type);
+		json_object_add_with_type(section, "serial", fru->chassis.serial.val, fru->chassis.serial.type);
 		temp_obj = json_object_new_array();
-		fru_reclist_t *next = info->fru.chassis.cust;
+		fru_reclist_t *next = fru->chassis.cust;
 		while (next != NULL) {
 			json_object_add_with_type(temp_obj, NULL, next->rec->val,
 									  next->rec->type);
@@ -621,17 +618,17 @@ void save_to_json_file(FILE **fp, const char *fname,
 
 	if (info->has_product) {
 		section = json_object_new_object();
-		temp_obj = json_object_new_int(info->fru.product.lang);
+		temp_obj = json_object_new_int(fru->product.lang);
 		json_object_object_add(section, "lang", temp_obj);
-		json_object_add_with_type(section, "mfg", info->fru.product.mfg.val, info->fru.product.mfg.type);
-		json_object_add_with_type(section, "pname", info->fru.product.pname.val, info->fru.product.pname.type);
-		json_object_add_with_type(section, "serial", info->fru.product.serial.val, info->fru.product.serial.type);
-		json_object_add_with_type(section, "pn", info->fru.product.pn.val, info->fru.product.pn.type);
-		json_object_add_with_type(section, "ver", info->fru.product.ver.val, info->fru.product.ver.type);
-		json_object_add_with_type(section, "atag", info->fru.product.atag.val, info->fru.product.atag.type);
-		json_object_add_with_type(section, "file", info->fru.product.file.val, info->fru.product.file.type);
+		json_object_add_with_type(section, "mfg", fru->product.mfg.val, fru->product.mfg.type);
+		json_object_add_with_type(section, "pname", fru->product.pname.val, fru->product.pname.type);
+		json_object_add_with_type(section, "serial", fru->product.serial.val, fru->product.serial.type);
+		json_object_add_with_type(section, "pn", fru->product.pn.val, fru->product.pn.type);
+		json_object_add_with_type(section, "ver", fru->product.ver.val, fru->product.ver.type);
+		json_object_add_with_type(section, "atag", fru->product.atag.val, fru->product.atag.type);
+		json_object_add_with_type(section, "file", fru->product.file.val, fru->product.file.type);
 		temp_obj = json_object_new_array();
-		fru_reclist_t *next = info->fru.product.cust;
+		fru_reclist_t *next = fru->product.cust;
 		while (next != NULL) {
 			json_object_add_with_type(temp_obj, NULL, next->rec->val,
 									  next->rec->type);
@@ -643,19 +640,19 @@ void save_to_json_file(FILE **fp, const char *fname,
 
 	if (info->has_board) {
 		char timebuf[DATEBUF_SZ] = {0};
-		tv_to_datestr(timebuf, &info->fru.board.tv);
+		tv_to_datestr(timebuf, &fru->board.tv);
 
 		section = json_object_new_object();
-		temp_obj = json_object_new_int(info->fru.board.lang);
+		temp_obj = json_object_new_int(fru->board.lang);
 		json_object_object_add(section, "lang", temp_obj);
 		json_object_add_with_type(section, "date", timebuf, 0);
-		json_object_add_with_type(section, "mfg", info->fru.board.mfg.val, info->fru.board.mfg.type);
-		json_object_add_with_type(section, "pname", info->fru.board.pname.val, info->fru.board.pname.type);
-		json_object_add_with_type(section, "serial", info->fru.board.serial.val, info->fru.board.serial.type);
-		json_object_add_with_type(section, "pn", info->fru.board.pn.val, info->fru.board.pn.type);
-		json_object_add_with_type(section, "file", info->fru.board.file.val, info->fru.board.file.type);
+		json_object_add_with_type(section, "mfg", fru->board.mfg.val, fru->board.mfg.type);
+		json_object_add_with_type(section, "pname", fru->board.pname.val, fru->board.pname.type);
+		json_object_add_with_type(section, "serial", fru->board.serial.val, fru->board.serial.type);
+		json_object_add_with_type(section, "pn", fru->board.pn.val, fru->board.pn.type);
+		json_object_add_with_type(section, "file", fru->board.file.val, fru->board.file.type);
 		temp_obj = json_object_new_array();
-		fru_reclist_t *next = info->fru.board.cust;
+		fru_reclist_t *next = fru->board.cust;
 		while (next != NULL) {
 			json_object_add_with_type(temp_obj, NULL, next->rec->val,
 									  next->rec->type);
@@ -666,7 +663,7 @@ void save_to_json_file(FILE **fp, const char *fname,
 	}
 	if (info->has_multirec) {
 		json_object *jso = NULL;
-		json_from_mr_reclist(&jso, info->fru.mr_reclist, config->flags);
+		json_from_mr_reclist(&jso, fru->mr_reclist, config->flags);
 		json_object_object_add(json_root, "multirecord", jso);
 	}
 	json_object_to_fd(fileno(*fp), json_root,

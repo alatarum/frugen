@@ -1,10 +1,14 @@
-#ifndef __FRULIB_SMBIOS_CHASSIS_H__
-#define __FRULIB_SMBIOS_CHASSIS_H__
-
-/*
- * This file contains definitions for various enums defined
- * in DMTF SMBIOS Specification.
+/** @file
+ *
+ *  Definitions for various enums defined in DMTF SMBIOS Specification.
+ *
+ *  @copyright
+ *  Copyright (C) 2016-2024 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *
+ *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
+
+#pragma once
 
 enum {
 	SMBIOS_CHASSIS_UNDEFINED,
@@ -43,6 +47,9 @@ enum {
 	SMBIOS_CHASSIS_TYPES_TOTAL,
 };
 
+/** Check if chassis type code is valid according to SMBIOS Specification
+ *
+ * @retval true Type is valid
+ * @retval false Type is invalid
+ */
 #define SMBIOS_CHASSIS_IS_VALID(t) ((t) > SMBIOS_CHASSIS_UNDEFINED && (t) < SMBIOS_CHASSIS_TYPES_TOTAL)
-
-#endif // __FRULIB_SMBIOS_CHASSIS_H__
