@@ -1,844 +1,1615 @@
-/*
+/** @file
  *  @brief Header for FRU information helper functions
  *
+ *  @copyright
  *  Copyright (C) 2016-2024 Alexander Amelkin <alexander@amelkin.msk.ru>
- *  SPDX-License-Identifier: LGPL-2.0-or-later OR Apache-2.0
+ *
+ *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 
 #pragma once
-
-#define LIBFRU_MAJOR    @PROJECT_VERSION_MAJOR@L /// Major component of the library version
-#define LIBFRU_MINOR    @PROJECT_VERSION_MINOR@L /// Minor component of the library version
-#define LIBFRU_SUBMINOR @PROJECT_VERSION_PATCH@L /// Subminor component of the library version
-#define LIBFRU_VERSION  (LIBFRU_MAJOR << 16 | \
-                         LIBFRU_MINOR << 8 | \
-                         LIBFRU_SUBMINOR) /// Integer representation of the library version
-
-#include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/time.h>
+#include <sys/types.h>
 
-#define ARRAY_SZ(a) (sizeof(a) / sizeof((a)[0]))
-#define FRU_BIT(x) (1 << (x))
+/**
+ * @defgroup common Common
+ * @brief Common definitions for the library
+ *
+ * @defgroup internal Internal Use Area
+ * @brief Definitions related to Internal Use Area
+ *
+ * @defgroup infocommon Information areas
+ * @brief Definitions common for all three Info areas
+ *
+ * @defgroup carea Chassis Information Area
+ * @brief Definitions related to Chassis Info Area
+ * @ingroup infocommon
+ *
+ * @defgroup barea Board Information Area
+ * @brief Definitions related to Board Info Area
+ * @ingroup infocommon
+ *
+ * @defgroup parea Product area
+ * @brief Definitions related to Product Info Area
+ * @ingroup infocommon
+ *
+ * @defgroup multirec MultiRecord area
+ * @brief Definitions related to MultiRecord Area
+ */
 
-/** Flags to FRU decoding functions */
-typedef enum {
-	FRU_NOFLAGS = 0,
-	FRU_IGNFVER = FRU_BIT(0), /// Ignore FRU version (in FRU header)
-	FRU_IGNFHCKSUM = FRU_BIT(1), /// Ignore FRU header checksum
-	FRU_IGNFDCKSUM = FRU_BIT(2), /// Ignore FRU data checksum
-	FRU_IGNAVER = FRU_BIT(3), /// Ignore area version
-	FRU_IGNRVER = FRU_BIT(4), /// Ignore record version (for multirecord area)
-	FRU_IGNACKSUM = FRU_BIT(5), /// Ignore area checksum
-	FRU_IGNRHCKSUM = FRU_BIT(6), /// Ignore record header checksum (for multirecord area)
-	FRU_IGNRDCKSUM = FRU_BIT(7), /// Ignore record data checksum (for multirecord area)
-	FRU_IGNRNOEOL = FRU_BIT(8), /// Ignore no EOL-flagged record, use any previous valid records
-} fru_flags_t;
+/**
+ * @addtogroup common
+ * @{
+ */
+#define LIBFRU_MAJOR    @PROJECT_VERSION_MAJOR@L ///< Major component of the library version
+#define LIBFRU_MINOR    @PROJECT_VERSION_MINOR@L ///< Minor component of the library version
+#define LIBFRU_SUBMINOR @PROJECT_VERSION_PATCH@L ///< Subminor component of the library version
+
+/**
+ * @brief Integer representation of the library version
+ *
+ * You may use this as a feature test macro, e.g.:
+ * ```.c
+ * #if (LIBFRU_VERSION >= 0x020000) // Library is at least version 3.0.0
+ * // Do something
+ * #endif
+ * ```
+ */
+#define LIBFRU_VERSION  (LIBFRU_MAJOR << 16 | \
+                         LIBFRU_MINOR << 8 | \
+                         LIBFRU_SUBMINOR)
+
+/** @} common */
 
 /*
- * Binary FRU file related definitions
- */
-
-/**
- * FRU file layout as per IPMI FRU Specification
+ * Private macro definitions.
  *
- * Can be used for type-punning byte arrays
- */
-#pragma pack(push, 1)
-typedef struct {
-	uint8_t ver:4, rsvd:4;
-	uint8_t internal;
-	uint8_t chassis;
-	uint8_t board;
-	uint8_t product;
-	uint8_t multirec;
-	uint8_t pad;
-	uint8_t hchecksum; ///< Header checksum
-	uint8_t data[];
-} __attribute__((packed)) fru_t;
-
-#define FRU_VER_1    1
-#define FRU_MINIMUM_AREA_HEADER \
-	uint8_t ver;  /**< Area format version, only lower 4 bits */
-
-#define FRU_INFO_AREA_HEADER \
-	FRU_MINIMUM_AREA_HEADER; \
-	uint8_t blocks;         /**< Size in 8-byte blocks */ \
-	uint8_t langtype        /**< Area language code or chassis type (from smbios.h) */
-
-#define LANG_DEFAULT 0
-#define LANG_ENGLISH 25
-
-typedef struct fru_info_area_s { // The generic info area structure
-	FRU_INFO_AREA_HEADER;
-	char data[];
-} __attribute__((packed)) fru_info_area_t;
-
-#define FRU_INFO_AREA_HEADER_SZ sizeof(fru_info_area_t)
-
-typedef struct {
-	FRU_MINIMUM_AREA_HEADER;
-	char data[];
-} __attribute__((packed)) fru_internal_use_area_t;
-
-typedef fru_info_area_t fru_chassis_area_t;
-
-typedef struct fru_board_area_s {
-	FRU_INFO_AREA_HEADER;
-	uint8_t mfgdate[3]; ///< Manufacturing date/time in minutes since 1996/1/1 0:00
-	char data[];     ///< Variable size (multiple of 8 bytes) data with tail padding and checksum
-} __attribute__((packed)) fru_board_area_t;
-
-typedef fru_info_area_t fru_product_area_t;
-
-typedef struct {
-	uint8_t type_id; ///< Record Type ID
-	uint8_t eol_ver;
-#define FRU_MR_EOL 0x80 // End-of-list flag
-#define FRU_MR_VER_MASK 0x07
-#define FRU_MR_VER 0x02 // Version is always 2
-	uint8_t len;           ///< Length of the raw `data` array
-	uint8_t rec_checksum;
-	uint8_t hdr_checksum;
-} __attribute__((packed)) fru_mr_header_t;
-
-typedef struct {
-	fru_mr_header_t hdr;
-#define IS_FRU_MR_END(rec) ((rec)->hdr.eol_ver & FRU_MR_EOL)
-#define IS_FRU_MR_VALID_VER(rec) \
-            (((rec)->hdr.eol_ver & FRU_MR_VER_MASK) == FRU_MR_VER)
-	uint8_t data[];        ///< Raw data of size `len`
-} __attribute__((packed)) fru_mr_rec_t;
-#define FRU_MR_REC_SZ(rec) (sizeof(fru_mr_rec_t) + (rec)->hdr.len)
-
-typedef struct {
-	fru_mr_header_t hdr;
-	uint8_t subtype;
-	uint8_t data[];
-} __attribute__((packed)) fru_mr_mgmt_rec_t;
-
-/**
- * Area indices inside the FRU information structure header
- */
-typedef enum {
-	FRU_AREA_NOT_PRESENT = -1,
-	FRU_INTERNAL_USE,
-	FRU_CHASSIS_INFO,
-	FRU_BOARD_INFO,
-	FRU_PRODUCT_INFO,
-	FRU_MULTIRECORD,
-	FRU_MAX_AREAS
-} fru_area_type_t;
-
-/**
- * Indices of mandatory fields in Chassis Info Area
- */
-typedef enum {
-	FRU_CHASSIS_PARTNO,
-	FRU_CHASSIS_SERIAL,
-	FRU_CHASSIS_FIELD_COUNT
-} fru_chassis_field_t;
-
-/**
- * Indices of mandatory fields in Board Info Area
- */
-typedef enum {
-	FRU_BOARD_MFG,
-	FRU_BOARD_PRODNAME,
-	FRU_BOARD_SERIAL,
-	FRU_BOARD_PARTNO,
-	FRU_BOARD_FILE,
-	FRU_BOARD_FIELD_COUNT
-} fru_board_field_t;
-
-/**
- * Indices of mandatory fields in Product Info Area
- */
-typedef enum {
-	FRU_PROD_MFG,
-	FRU_PROD_NAME,
-	FRU_PROD_MODELPN,
-	FRU_PROD_VERSION,
-	FRU_PROD_SERIAL,
-	FRU_PROD_ASSET,
-	FRU_PROD_FILE,
-	FRU_PROD_FIELD_COUNT
-} fru_prod_field_t;
-
-/** Maximum field cound among all info areas */
-#define FRU_MAX_FIELD_COUNT FRU_PROD_FIELD_COUNT
-
-/// Table 16-2, MultiRecord Area Record Types
-typedef enum {
-	FRU_MR_INVALID = -1,
-	FRU_MR_MIN = 0x00,
-	FRU_MR_PSU_INFO = 0x00,
-	FRU_MR_DC_OUT = 0x01,
-	FRU_MR_DC_LOAD = 0x02,
-	FRU_MR_MGMT_ACCESS = 0x03,
-	FRU_MR_BASE_COMPAT = 0x04,
-	FRU_MR_EXT_COMPAT = 0x05,
-	FRU_MR_ASF_FIXED_SMBUS = 0x06,
-	FRU_MR_ASF_LEGACY_ALERTS = 0x07,
-	FRU_MR_ASF_REMOTE_CTRL = 0x08,
-	FRU_MR_EXT_DC_OUT = 0x09,
-	FRU_MR_EXT_DC_LOAD = 0x0A,
-	FRU_MR_NVME_B = 0x0B,
-	FRU_MR_NVME_C = 0x0C,
-	FRU_MR_NVME_D = 0x0D,
-	FRU_MR_NVME_E = 0x0E,
-	FRU_MR_NVME_F = 0x0F,
-	FRU_MR_OEM_START = 0xC0,
-	FRU_MR_OEM_END = 0xFF,
-	FRU_MR_MAX = 0xFF
-} fru_mr_type_t;
-
-/// Table 18-1, Power Supply Information
-typedef struct {
-	uint16_t overall_cap;
-#define FRU_MR_PSU_OCAP_MAX ((1 << 12) - 1)
-#define FRU_MR_PSU_OCAP_MASK FRU_MR_PSU_OCAP_MAX
-	uint16_t peak_va;
-#define FRU_MR_PSU_PEAK_VA_UNSPEC 0xFFFF
-	uint8_t inrush_amp;
-#define FRU_MR_PSU_INRUSH_AMP_UNSPEC 0xFF
-	uint8_t inrush_ms;
-#define FRU_MR_PSU_INRUSH_MS_UNSPEC 0
-	int16_t lo_vin1;
-	int16_t hi_vin1;
-	int16_t lo_vin2;
-	int16_t hi_vin2;
-#define FRU_MR_PSU_VIN_SINGLE_RANGE 0
-#define FRU_MR_PSU_VIN_RANGE_STEP_mV 10
-	uint8_t lo_freq;
-#define FRU_MR_PSU_LFREQ_ACCEPTS_DC 0
-	uint8_t hi_freq;
-#define FRU_MR_PSU_HFREQ_DC_ONLY 0
-	uint8_t dropout_tolerance_ms;
-	uint8_t flags;
-#define FRU_MR_PSU_FLAGS_PREFAIL_SUPPORT (1 << 0)
-#define FRU_MR_PSU_FLAGS_PF_CORRECTION (1 << 1)
-#define FRU_MR_PSU_FLAGS_AUTOSWITCH (1 << 2)
-#define FRU_MR_PSU_FLAGS_HOTSWAP (1 << 3)
-#define FRU_MR_PSU_FLAGS_TACH_PPR (1 << 4)
-#define   FRU_MR_PSU_TACH_PPR(x) (((x)->flags & FRU_MR_PSU_FLAGS_TACH_PPR) ? 2 : 1)
-#define FRU_MR_PSU_FLAGS_PREFAIL_POL FRU_MR_PSU_FLAGS_TACH_PPR
-	uint16_t peak_watts_holdup;
-#define FRU_MR_PSU_HOLDUP_SHIFT 12
-#define FRU_MR_PSU_HOLDUP(x) ((x)->peak_watts_holdup >> FRU_MR_PSU_HOLDUP_SHIFT)
-#define FRU_MR_PSU_PEAK_WATTS_MASK ((1 << FRU_MR_PSU_HOLDUP_SHIFT) - 1)
-#define FRU_MR_PSU_PEAK_WATTS(x) ((x)->peak_watts_holdup & FRU_MR_PSU_PEAK_WATTS_MASK)
-#define FRU_MR_PSU_PEAK_WATTS_UNSPEC FRU_MR_PSU_PEAK_WATTS_MASK
-	struct {
-		uint8_t per_range;
-#define FRU_MR_PSU_WATTS_RANGE1_SHIFT 4
-#define FRU_MR_PSU_WATTS_RANGE2_SHIFT 0
-#define FRU_MR_PSU_WATTS_MASK ((1 << FRU_MR_PSU_WATTS_RANGE1_SHIFT) - 1)
-#define FRU_MR_PSU_WATTS_RANGE(x, r) ( \
-        	( \
-        		((x)->combined_watts.per_range) >> FRU_MR_PSU_WATTS_RANGE##r##_SHIFT \
-        	) & FRU_MR_PSU_WATTS_MASK \
-        )
-		uint16_t total;
-	} __attribute__((packed)) combined_watts;
-	uint8_t prefail_tach_rps;
-#define FRU_MR_PSU_PREFAIL_BINARY 0x00
-#define FRU_MR_PSU_PREFAIL_RPM(x) (((x)->prefail_tach_rps) * 60) // RPS to RPM conversion
-} __attribute__((packed)) fru_mr_psu_t;
-
-/// Table 18-6, Management Access Record
-typedef enum {
-	FRU_MR_MGMT_INVALID = 0x00,
-	FRU_MR_MGMT_MIN = 0x01,
-	FRU_MR_MGMT_SYS_URL = 0x01,
-	FRU_MR_MGMT_SYS_NAME = 0x02,
-	FRU_MR_MGMT_SYS_PING = 0x03,
-	FRU_MR_MGMT_COMPONENT_URL = 0x04,
-	FRU_MR_MGMT_COMPONENT_NAME = 0x05,
-	FRU_MR_MGMT_COMPONENT_PING = 0x06,
-	FRU_MR_MGMT_SYS_UUID = 0x07,
-	FRU_MR_MGMT_MAX = 0x07,
-} fru_mr_mgmt_type_t;
-#define MGMT_TYPE_ID(type) ((type) - FRU_MR_MGMT_MIN)
-#define MGMT_TYPENAME_ID(name) MGMT_TYPE_ID(FRU_MR_MGMT_##name)
-
-#pragma pack(pop)
-/*
- * End of binary FRU file related definitions
+ * These macros aren't for library users, but they are needed for public
+ * interfaces definition.
+ *
+ * @cond PRIVATE
  */
 
+/** @brief Deallocate a buffer and set it to NULL */
+#define zfree(buf) do { \
+	int err = errno; /* Prevent errno corruption */ \
+	free(buf); \
+	(buf) = NULL; \
+	errno = err; \
+} while(0)
+
+#define FRU__BIT(x) (1 << (x))
 
 /*
- * Exploded/decoded FRU related definitions
+ * Field types per Section 13 of IPMI FRU Specification,
+ * in their binary/encoded representation
  */
+#define FRU__TYPE_BINARY         0x00
+#define FRU__TYPE_BCDPLUS        0x01
+#define FRU__TYPE_ASCII_6BIT     0x02
+#define FRU__TYPE_TEXT           0x03
 
-#define FRU_IS_ATYPE_VALID(t) ((t) >= FRU_AREA_NOT_PRESENT && (t) < FRU_MAX_AREAS)
+#define FRU__TYPE_BITS_MASK    0xC0
+#define FRU__FIELDLEN(x)   ((size_t)(((x) & ~FRU__TYPE_BITS_MASK)))
 
-/**
- * FRU area description structure.
+/** For binary/encoded FRU fields.
+ *  You definitely don't need to directly use this.
+ */
+#define FRU__FIELDMAXLEN       FRU__FIELDLEN(UINT8_MAX)
+/** @endcond */
+
+#define FRU_MAX(a, b) (((a) > (b)) ? (a) : (b)) ///< Return the maximum of a and b
+#define FRU_MIN(a, b) (((a) > (b)) ? (b) : (a)) ///< Return the minimum of a and b
+
+/** For C-string allocation.
  *
- * Contains information about a single arbitrary area and points
- * to the encoded area data.
+ * You probably don't need to directly use this, prefer
+ * using \p fru_field_t type:
+ *
+ * ```.c
+ * fru_field_t field;
+ * 
+ * if (strlen(mystring) >= sizeof(field.val)) {
+ *     // Smells like buffer overflow
+ * }
+ * ```
+ *
+ * Better yet, use fru_set_field() that performs the required
+ * checks itself.
  */
-typedef struct fru_area_s {
-	fru_area_type_t atype; /**< FRU area type */
-	uint8_t blocks; /**< Size of the data field in 8-byte blocks */
-	void * data; /**< Pointer to the actual FRU area data */
-} fru_area_t;
+// BCD+ decoded data is twice the length of encoded,
+// so is hex string for binary data
+#define FRU_FIELDMAXARRAY     ((2 * FRU__FIELDMAXLEN) + 1)
+
+/*
+ * Public definitions
+ */
 
 /**
- * A linked list of multirecord area records
+ * @addtogroup infocommon
+ * @{
  */
-typedef struct fru_mr_reclist_s {
-	fru_mr_rec_t *rec;
-	struct fru_mr_reclist_s *next;
-} fru_mr_reclist_t;
+#define FRU_INFO_AREAS 3 /**< Number of standard 'info' areas */
+#define FRU_FIRST_INFO_AREA FRU_CHASSIS_INFO /**< Index of the first 'info' area */
+#define FRU_LAST_INFO_AREA FRU_PRODUCT_INFO /**< Index of the first 'info' area */
+/** Check if \a atype is an information area type */
+#define FRU_IS_INFO_AREA(atype) (FRU_FIRST_INFO_AREA <= (atype) \
+                                 && (atype) <= FRU_LAST_INFO_AREA)
 
-typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
+/**
+ * Convert an area type \a atype into an information area
+ * index or to -1 if \a atype is not an info area type
+ */
+#define FRU_ATYPE_TO_INFOIDX(atype) (FRU_IS_INFO_AREA(atype) ? (int)((atype) - FRU_FIRST_INFO_AREA) : -1)
 
-#define FRU_AREA_HAS_DATE(t) (FRU_BOARD_INFO == (t))
-#define FRU_DATE_AREA_HEADER_SZ sizeof(fru_board_area_t)
-#define FRU_DATE_UNSPECIFIED 0
+/**
+ * Convert an info area index \a idx into a full-range area type
+ * or to (fru_area_type_t)(-1) if \a idx was invalid.
+ */
+#define FRU_INFOIDX_TO_ATYPE(idx) (((idx) >= 0 && (idx) < FRU_INFO_AREAS) \
+                                   ? (fru_area_type_t)((idx) + FRU_FIRST_INFO_AREA) \
+                                   : (fru_area_type_t)(-1))
 
-#define FRU_AREA_HAS_SIZE(t) (FRU_INTERNAL_USE < (t) && (t) < FRU_MULTIRECORD)
-#define FRU_AREA_HAS_HEADER(t) (FRU_MULTIRECORD != (t))
-#define FRU_AREA_IS_GENERIC(t) FRU_AREA_HAS_SIZE(t)
+/**
+ * Get the info area index from an area type enum name.
+ *
+ * That is, instead of `FRU_ATYPE_INFOIDX(FRU_PRODUCT_INFO)`
+ * you may write `FRU_INFOIDX(PRODUCT)`.
+ *
+ * This is particularly useful in array initializers:
+ *
+ * @b Example
+ * ```.c
+ * int magic_number[FRU_INFO_AREAS] = {
+ *     [FRU_INFOIDX(CHASSIS)] = 42,
+ *     [FRU_INFOIDX(BOARD)] = 1337,
+ *     [FRU_INFOIDX(PRODUCT)] = 1984,
+ * };
+ * ```
+ */
+#define FRU_INFOIDX(a) FRU_ATYPE_TO_INFOIDX(FRU_##a##_INFO)
 
-#define __TYPE_BITS_SHIFT     6
-#define __TYPE_BITS_MASK      0xC0
-#define __TYPE_BINARY         0x00
-#define __TYPE_BCDPLUS        0x01
-#define __TYPE_ASCII_6BIT     0x02
-#define __TYPE_TEXT           0x03
+/**
+ * Iterate through all info area indices using \a it as an iterator.
+ * It is recommended to declare \a it as \p size_t.
+ *
+ * @b Example
+ * ```.c
+ * const char * const area_names[FRU_INFO_AREAS] = { "Chassis", "Board", "Product" };
+ * size_t infoidx;
+ * FRU_FOREACH_INFOIDX(infoidx) {
+ *     fru_area_type_t atype = FRU_INFOIDX_TO_ATYPE(index);
+ *     if (fru->present[atype]) {
+ *         printf("%s Information Area is present\n", area_names[index]);
+ *     }
+ * }
+ * ```
+ */
+#define FRU_FOREACH_INFOIDX(it) for ((it) = 0; (it) <= FRU_INFO_AREAS; (it)++)
 
-/** FRU field type. Any of BINARY, BCDPLUS, ASCII_6BIT or TEXT. */
-#define FRU_MAKETYPE(x)       (__TYPE_##x << __TYPE_BITS_SHIFT)
-#define FRU_FIELDDATALEN(x)   (size_t)(((x) & ~__TYPE_BITS_MASK))
-#define FRU_FIELDMAXLEN       FRU_FIELDDATALEN(UINT8_MAX) /// For FRU fields
-#define FRU_FIELDMAXARRAY     ((2 * FRU_FIELDMAXLEN) + 1) /// For C array allocation, BCD+ decoded data is twice the length of encoded
-#define FRU_FIELDSIZE(typelen) (FRU_FIELDDATALEN(typelen) + sizeof(fru_field_t))
-#define FRU_TYPELEN(t, l)     (FRU_MAKETYPE(t) | FRU_FIELDDATALEN(l))
-#define FRU_TYPE(t)           (((t) & __TYPE_BITS_MASK) >> __TYPE_BITS_SHIFT)
-#define FRU_ISTYPE(t, type)   (FRU_TYPE(t) == __TYPE_##type)
-
-#define LEN_AUTO              0
-#define LEN_BCDPLUS           -1
-#define LEN_6BITASCII         -2
-#define LEN_TEXT              -3
-
-#define FRU_6BIT_LENGTH(len)    (((size_t)(len) * 3 + 3) / 4)
-#define FRU_6BIT_FULLLENGTH(l6) (((size_t)(l6) * 4) / 3)
-#define FRU_FIELD_EMPTY       FRU_TYPELEN(TEXT, 0)
-#define FRU_FIELD_TERMINATOR  FRU_TYPELEN(TEXT, 1)
-
-#define FRU_BLOCK_SZ 8
-#define FRU_BYTES(blocks) ((size_t)((blocks) * FRU_BLOCK_SZ))
-#define FRU_BLOCKS(bytes)  (((bytes) + FRU_BLOCK_SZ - 1) / FRU_BLOCK_SZ)
-
+/**
+ * @brief Field encoding type.
+ *
+ * This enum contains values as per Section 13 of IPMI FRU Specification,
+ * as well as some extensions used solely by the functions of this
+ * library and not saved into the output binary file or buffer.
+ *
+ * Anything outside the range of `FRU_FE_MIN` to `FRU_FE_MAX` is an extension.
+ *
+ * See also \ref FRU_REAL_FE(), \ref FRU_FE_IS_REAL(),
+ * \ref FRU_FIELD_IS_REAL_ENC(), \ref FRU_FIELD_IS_AUTO_ENC()
+ *
+ */
 typedef enum {
-    FIELD_TYPE_TERMINATOR = -4,
-    FIELD_TYPE_UNKNOWN = -3,
-    FIELD_TYPE_PRESERVE = FIELD_TYPE_UNKNOWN,
-    FIELD_TYPE_NONPRINTABLE = -2,
-    FIELD_TYPE_TOOLONG = -1,
-    FIELD_TYPE_AUTO = 0,
-    FIELD_TYPE_EMPTY = FIELD_TYPE_AUTO,
-    FIELD_TYPE_BINARY = (__TYPE_BINARY + 1),
-    BASE_FIELD_TYPE = FIELD_TYPE_BINARY,
-    FIELD_TYPE_BCDPLUS = (__TYPE_BCDPLUS + 1),
-    FIELD_TYPE_6BITASCII = (__TYPE_ASCII_6BIT + 1),
-    FIELD_TYPE_TEXT = (__TYPE_TEXT + 1),
-    TOTAL_FIELD_TYPES
-} field_type_t;
-
-const char * fru_enc_name_by_type(field_type_t type);
-field_type_t fru_enc_type_by_name(const char *name);
-
-/// Extract FRU field type as field_type_t
-#define FIELD_TYPE_T(t) (FRU_TYPE(t) + BASE_FIELD_TYPE)
+	FRU_FE_EMPTY, /**< The field is empty. The default state of a
+	               *   fru_field_t variable when it is zeroed.
+	               *   Fields of this encoding will be saved as empty
+	               *   even if their `fru_field_t.val` string is not.
+	               */
+	FRU_FE_BASE, /**< Base encoding, starting at which all the binary FRU file
+	              *   field encodings are mapped */
+	FRU_FE_BINARY = (FRU__TYPE_BINARY + FRU_FE_BASE), /**< Encode the field as binary, the value
+	                                                   *   is a hex string (e.g., 1337C0DE) */
+	FRU_FE_MIN = FRU_FE_BINARY, /**< The minumum non-auto (real) encoding,
+	                             * equals \ref FRU_FE_BINARY */
+	FRU_FE_BCDPLUS = (FRU__TYPE_BCDPLUS + FRU_FE_BASE), /**< Encode the field as BCD+, the value
+	                                                     *   may only contain digits 0-9, space,
+	                                                     *   dash, or period. */
+	FRU_FE_6BITASCII = (FRU__TYPE_ASCII_6BIT + FRU_FE_BASE), /**< Encode the field as 6-bit ASCII,
+	                                                          *   the value may only contain
+	                                                          *   characters per Table 13-1 of
+	                                                          *   IPMI FRU Specification */
+	FRU_FE_TEXT = (FRU__TYPE_TEXT + FRU_FE_BASE), /**< Encode the field as plain text (ASCII+Latin1).
+	                                               *   Only English is currently supported,
+	                                               *   see Section 13 of IPMI FRU Specification */
+	FRU_FE_MAX = FRU_FE_TEXT, /**< Maximim valid 'real' field encoding,
+	                           *   equals \ref FRU_FE_TEXT */
+	FRU_FE_AUTO, /**< When saving, detect the encoding
+	              *   automatically based on the character range of `fru_field_t.val` */
+	FRU_FE_UNKNOWN, /**< Field encoding couldn't be detected or wasn't set */
+	FRU_FE_PRESERVE = FRU_FE_UNKNOWN, /**< Preserve the field encoding as it was,
+	                                   *   fail if impossible. This is a virtual encoding
+	                                   *   for use with fru_setfield() only */
+	FRU_FE_TOTALCOUNT, /**< Total count of all field encodings
+	                    *   (including the extensions) */
+	FRU_FE_REALCOUNT = (FRU_FE_MAX - FRU_FE_MIN + 1), /**< Total count of \a standard
+	                                                   *   field encodings (not including
+	                                                   *   the extensions) */
+} fru_field_enc_t;
 
 /**
- * A generic input (decoded) field structure containing
- * the field encoding type and the input data as a string.
+ * Convert a fru_field_enc_t value to an index to a FRU_FE_REALCOUNT-sized array
+ *
+ * @param t \ref fru_field_enc_t, a field encoding type value
+ */
+#define FRU_REAL_FE(t) ((t) - FRU_FE_BASE)
+
+/**
+ * Convert an index to a FRU_FE_REALCOUNT-sized array to a fru_field_enc_t value
+ *
+ * @param t an unsigned integer value
+ */
+#define FRU_FE_FROMREAL(t) ((t) + FRU_FE_BASE)
+
+/**
+ * Check if \a t is a 'real' encoding type? (One that is defined by FRU specification)
+ *
+ * @param t \ref fru_field_enc_t, a field encoding type value
+ */
+#define FRU_FE_IS_REAL(t) (FRU_FE_MIN <= (t) && (t) <= FRU_FE_MAX)
+
+/**
+ * Check if field \a f is non-NULL and has a real encoding
+ *
+ * @param f \ref fru_field_t *, A field pointer
+ */
+#define FRU_FIELD_IS_REAL_ENC(f) ((f) && FRU_FE_IS_REAL((f)->enc))
+
+/**
+ * Check if field \a f is non-NULL and has an auto encoding
+ *
+ * @param f \ref fru_field_t *, A field pointer
+ */
+#define FRU_FIELD_IS_AUTO_ENC(f) ((f) && FRU_FE_AUTO == ((f)->enc))
+
+/**
+ * @brief A generic input (decoded) field structure.
+ *
+ * Contains the FRU field encoding as well as the
+ * field value as a string.
+ *
+ * You probably don't want to set this manually. Prefer
+ * the fru_setfield() function instead as it performs
+ * additional checks.
  */
 typedef struct {
-	field_type_t type;
-	char val[FRU_FIELDMAXARRAY];
-} decoded_field_t;
-
-/**
- * Store a string and encoding type in a decoded_field_t structure.
- * No checks are performed except for the string length.
- *
- * @param[in,out] field  A pointer to a decoded field structure to fill with data
- * @param[in]     s      The source data string
- * @param[in]     enc    The desired encoding, use FILED_TYPE_PRESERVE to
- *                       preserve whatever value is already in \a field.
- *
- */
-void fru_loadfield(decoded_field_t *field, const char *s, field_type_t enc);
-
-/**
- * A generic FRU area encoded field header structure.
- *
- * Every field in chassis, board and product information areas has such a header.
- */
-typedef struct fru_field_s {
-	uint8_t typelen;   /**< Type/length of the field */
-	uint8_t data[];    /**< The field data */
+	fru_field_enc_t enc; /**< The encoding of the field.
+	                      *
+	                      * Takes any of the \p field_enc_t values
+	                      */
+	char val[FRU_FIELDMAXARRAY]; ///< The decoded C-string representation of the field value
 } fru_field_t;
 
-/**
- * A single-linked list of decoded FRU area fields.
- *
- * This is used to describe any length chains of fields.
- * Mandatory fields are linked first in the order they appear
- * in the information area (as per Specification), then custom
- * fields are linked.
- */
-typedef struct fru_reclist_s {
-	decoded_field_t *rec; /**< A pointer to the field or NULL if not initialized */
-	struct fru_reclist_s *next; /**< The next record in the list or NULL if last */
-} fru_reclist_t;
+/// A list of custom fields of an info area
+typedef void * fru_custom_t; // The actual type is not for public use
+
+/** @} infocommon */
 
 /**
- * Allocate a new reclist entry and add it to \a reclist,
- * set \a reclist to point to the newly allocated entry if
- * \a reclist was NULL.
- *
- * @returns Pointer to the added entry
+ * @addtogroup carea
+ * @{
  */
-static inline void *add_generic_reclist(void *genlist_ptr, size_t rec_size)
-{
-	/**
-	 * A generic single-linked list abstraction.
-	 * This is used as a substitute for all other list types in the library.
-	 */
-	struct genlist_s {
-		void *rec; /* A pointer to the field or NULL if not initialized */
-		void *next; /* The next record in the list or NULL if last */
-	} *rec, **reclist = (struct genlist_s **) genlist_ptr, *reclist_ptr = *reclist;
-
-	if (!genlist_ptr) {
-		errno = EFAULT;
-		return NULL;
-	}
-
-	rec = (struct genlist_s *) calloc(1, rec_size);
-	if(!rec) return NULL;
-
-	// If the reclist is empty, update it
-	if(!(*reclist)) {
-		*reclist = rec;
-	} else {
-		// If the reclist is not empty, find the last entry and append the new one as next
-		while(reclist_ptr->next)
-			reclist_ptr = (struct genlist_s *) reclist_ptr->next;
-
-		reclist_ptr->next = rec;
-	}
-
-	return rec;
-}
-
-/// A wrapper around add_generic_reclist() to work with fru_reclist_t** and fru_mr_reclist_t**
-#define add_reclist(reclist) \
-	add_generic_reclist((reclist), sizeof(*(*reclist)->rec))
 
 /**
- * Find an \a n'th record in a list.
+ * @brief The exploded representation of chassis info area
  *
- * Works both with fru_reclist_t and fru_mr_reclist_t.
+ * Contains fields as per IPMI FRU Specification Table 10-1,
+ * in their decoded state
  *
- * @param[in] reclist A pointer to any record list
- * @param[in] n       The index of the record to find, 1-based
- * @returns A pointer to the found record or NULL
+ * @ingroup carea
  */
-static inline void *find_rec(void *reclist, size_t n)
-{
-	fru_reclist_t *rl = (fru_reclist_t *) reclist;
-
-	for (size_t i = 1; i != n && rl; rl = rl->next, i++);
-
-	return rl;
-}
-
-/// Works for any list (fru_generic_reclist_t*, fru_reclist_t*, fru_mr_reclist_t*)
-#define free_reclist(recp) while(recp) { \
-	typeof((recp)->next) next = (recp)->next; \
-	free((recp)->rec); \
-	free(recp); \
-	recp = next; \
-}
-
 typedef struct {
-	uint8_t type;
-	decoded_field_t pn;
-	decoded_field_t serial;
-	fru_reclist_t *cust;
-} fru_exploded_chassis_t;
+	uint8_t type; ///< Chassis type as per SMBIOS specification
+	fru_field_t pn; ///< Part Number
+	fru_field_t serial; ///< Serial Number
+	fru_custom_t cust; ///< List of custom fields
+} fru_chassis_t;
 
+/**
+ * @brief Indices of mandatory fields in Chassis Info Area
+ *
+ * These values are useful in combination with fru_getfield()
+ *
+ * @ingroup carea
+ */
+typedef enum {
+    FRU_CHASSIS_PARTNO,
+    FRU_CHASSIS_SERIAL,
+    FRU_CHASSIS_FIELD_COUNT
+} fru_chassis_field_t;
+/** @} carea */
+
+/**
+ * @addtogroup barea
+ * @{
+ */
+
+/**
+ * @brief Language code definitions as per IPMI FRU
+ *        Specification, Table 15-1.
+ *
+ * Only English is actually supported by the library.
+ * Other languages may produce unexpected results during
+ * decoding as well as during encoding.
+ */
+typedef enum {
+	FRU_LANG_DEFAULT = 0,  /**< Default Language code, implies English as per Table 15-1 */
+	FRU_LANG_ENGLISH = 25, /**< English language code */
+} fru_lang_t;
+
+/**
+ * @brief The exploded representation of board info area.
+ *
+ * Contains fields as per IPMI FRU Specification Table 11-1,
+ * in their decoded state
+ *
+ * @ingroup barea
+ */
 typedef struct {
-	uint8_t lang;
-	struct timeval tv;
-	decoded_field_t mfg;
-	decoded_field_t pname;
-	decoded_field_t serial;
-	decoded_field_t pn;
-	decoded_field_t file;
-	fru_reclist_t *cust;
-} fru_exploded_board_t;
+	fru_lang_t lang; ///< Language code
+	struct timeval tv; ///< Manufacturing date/time, in UTC
+	bool tv_auto; /**< On save, use current date/time. This is automatically
+	               *   initialized by fru_loadfile() and fru_loadbuffer()
+	               *   based on presence of date/time information in the loaded
+	               *   data. This field is set to \p true by fru_init().
+	               *
+	               *   When \a tv_auto is \p true, the value of \a tv field is ignored.
+	               */
+	fru_field_t mfg; ///< Board manufacturer name
+	fru_field_t pname; ///< Board product name
+	fru_field_t serial; ///< Board serial number
+	fru_field_t pn; ///< Board part number
+	fru_field_t file; ///< FRU File ID
+	fru_custom_t cust; ///< List of custom fields
+} fru_board_t;
 
+/**
+ * @brief Indices of mandatory fields in Board Info Area
+ *
+ * These values are useful in combination with fru_getfield()
+ *
+ * @ingroup barea
+ */
+typedef enum {
+    FRU_BOARD_MFG,
+    FRU_BOARD_PRODNAME,
+    FRU_BOARD_SERIAL,
+    FRU_BOARD_PARTNO,
+    FRU_BOARD_FILE,
+    FRU_BOARD_FIELD_COUNT
+} fru_board_field_t;
+
+/** @} barea */
+
+/**
+ * @brief The exploded representation of product info area
+ *
+ * Contains fields as per IPMI FRU Specification Table 12-1,
+ * in their decoded state
+ *
+ * @ingroup parea
+ */
 typedef struct {
-	uint8_t lang;
-	decoded_field_t mfg;
-	decoded_field_t pname;
-	decoded_field_t pn;
-	decoded_field_t ver;
-	decoded_field_t serial;
-	decoded_field_t atag;
-	decoded_field_t file;
-	fru_reclist_t *cust;
-} fru_exploded_product_t;
+	fru_lang_t lang;
+	fru_field_t mfg; ///< Product manufacturer
+	fru_field_t pname; ///< Product name
+	fru_field_t pn; ///< Product part number
+	fru_field_t ver; ///< Product version
+	fru_field_t serial; ///< Product serial number
+	fru_field_t atag; ///< Product asset tag
+	fru_field_t file; ///< FRU File ID
+	fru_custom_t cust; ///< List of custom fields
+} fru_product_t;
 
+/**
+ * @brief Indices of mandatory fields in Product Info Area
+ *
+ * These values are useful in combination with fru_getfield()
+ *
+ * @ingroup parea
+ */
+typedef enum {
+    FRU_PROD_MFG,
+    FRU_PROD_NAME,
+    FRU_PROD_MODELPN,
+    FRU_PROD_VERSION,
+    FRU_PROD_SERIAL,
+    FRU_PROD_ASSET,
+    FRU_PROD_FILE,
+    FRU_PROD_FIELD_COUNT
+} fru_prod_field_t;
+
+/**
+ * @brief Max mandatory field count among all info areas
+ * @ingroup infocommon
+ */
+#define FRU_MAX_FIELD_COUNT FRU_PROD_FIELD_COUNT
+
+/**
+ * A pointer to multi-record area descriptor.
+ * Not for direct modification by the user. See \ref fru_t.
+ *
+ * @ingroup multirec
+ */
+typedef void * fru_mr_t; // The actual type is not for public use
+
+
+/**
+ * @addtogroup common
+ * @{
+ */
+
+/**
+ * @brief FRU area types
+ *
+ * Also area indices inside the FRU information structure header
+ */
+typedef enum {
+	FRU_INTERNAL_USE, /**< Internal use area */
+	FRU_MIN_AREA = FRU_INTERNAL_USE, /**< Minimum area type (equals \ref FRU_INTERNAL_USE) */
+	FRU_CHASSIS_INFO, /**< Chassis information area */
+	FRU_BOARD_INFO, /**< Board information area */
+	FRU_PRODUCT_INFO, /**< Product information area */
+	FRU_MR, /**< Multirecord area */
+	FRU_MAX_AREA = FRU_MR, /**< Maximum area type (equals \ref FRU_MR) */
+	FRU_TOTAL_AREAS /**< Maximum total count of areas in a FRU file */
+} fru_area_type_t;
+/** Check if \a atype is any valid area type */
+#define FRU_IS_VALID_AREA(atype) (FRU_MIN_AREA <= (atype) && (atype) <= FRU_MAX_AREA)
+
+/**
+ * Iterate through all area types using \a it as an iterator.
+ * It is recommended to declare \a it as \ref fru_area_type_t.
+ *
+ * @b Example
+ * ```.c
+ * const char * const area_names[FRU_TOTAL_AREAS] = {
+ *     [FRU_INTERNAL_USE] = "Internal Use",
+ *     [FRU_CHASSIS_INFO] = "Chassis",
+ *     [FRU_BOARD_INFO] = "Board",
+ *     [FRU_PRODUCT_INFO] = "Product",
+ *     [FRU_MR] = "Multirecord"
+ * };
+ *
+ * fru_area_type_t atype;
+ * FRU_FOREACH_AREA(atype) {
+ *     if (fru->present[atype]) {
+ *         printf("%s %sArea is present\n",
+ *                area_names[atype],
+ *                FRU_IS_INFO_AREA(atype) ? "Information " : "");
+ *     }
+ * }
+ * ```
+ */
+#define FRU_FOREACH_AREA(it) for ((it) = FRU_MIN_AREA; (it) <= FRU_MAX_AREA; (it)++)
+
+/**
+ * @brief Exploded/decoded FRU data structure
+ *
+ * Describes an 'exploded' or 'decoded' FRU file, where each area
+ * is a set of text strings, easy for human comprehension and manipulation.
+ *
+ * This is the main type that all library API functions operate on.
+ *
+ * Please make sure you call fru_init(), fru_loadfile() or fru_loadbuffer()
+ * on a static or an automatic variable of this type before you use it.
+ * Otherwise the correct behavior of the library is not guaranteed.
+ *
+ * Best of all is to never allocate structures of this type statically
+ * or autimatically. Allocate them dynamically with a call to any of the
+ * functions named above.
+ */
 typedef struct {
-	char *internal_use; /// In exploded view this is a hex string
-	fru_exploded_chassis_t chassis;
-	fru_exploded_board_t board;
-	fru_exploded_product_t product;
-	fru_mr_reclist_t *mr_reclist;
-} fru_exploded_t;
+	bool present[FRU_TOTAL_AREAS]; /**< Area presence flags.
+	                                *
+	                                *   Please avoid direct modification,
+	                                *   prefer fru_enable_area(), fru_disable_area(),
+	                                *
+	                                *   Some functions such as fru_set_internal_hexstring(),
+	                                *   fru_add_mr(), fru_add_custom(), and fru_setfield()
+	                                *   will automatically enable the relevant area by
+	                                *   calling fru_enable_area() internally upon success.
+	                                */
+	fru_area_type_t order[FRU_TOTAL_AREAS]; /**< Order of the areas in the
+	                                         *   original binary fru file, or
+	                                         *   the order in which to save the
+	                                         *   structure into a file/buffer.
+	                                         *
+	                                         *   Only \p present areas
+	                                         *   will be encoded on save,
+	                                         *   in the order given by this
+	                                         *   array. On load, non-present
+	                                         *   areas will be listed first.
+	                                         *
+	                                         *   Please avoid direct modification.
+	                                         *   If you need tho change the area
+	                                         *   order, please prefer using
+	                                         *   fru_move_area().
+	                                         */
+	char * internal; ///< Internal use area as a hex string
+	fru_chassis_t chassis; ///< The chassis information structure
+	fru_board_t board; ///< The board information structure
+	fru_product_t product; ///< The product information structure
+	fru_mr_t mr; /**< The multi-record area descriptor. Operate on it
+	              *   using fru_add_mr(), fru_find_mr(), fru_replace_mr(),
+	              *   and fru_delete_mr()
+	              */
+} fru_t;
 
-fru_chassis_area_t * fru_chassis_info(const fru_exploded_chassis_t *chassis);
-fru_board_area_t * fru_board_info(const fru_exploded_board_t *board);
-fru_product_area_t * fru_product_info(const fru_exploded_product_t *product);
-
-/**
- * Take an input hex string and pack it into an "exploded" multirecord
- * area record in binary form, using the provided type.
- *
- * As per IPMI FRU specifiation section 18.4, no validity checks
- * are performed to restrict the values. Only the length is checked
- * to fit into the record's length field.
- *
- * @returns An errno-like negative error code
- * @retval 0        Success
- * @retval -EINVAL  Invalid string (wrong length, wrong symbols)
- * @retval -EFAULT  Invalid pointer
- * @retval >0       any errno that calloc() is allowed to set
- */
-int fru_mr_hexstr2rec(fru_mr_rec_t **rec,
-                      const char *str,
-                      fru_mr_type_t type);
-
-/**
- * Take an input string and pack it into an "exploded" multirecord
- * area "management access" record in binary form, using the
- * provided subtype.
- *
- * As per IPMI FRU specifiation section 18.4, no validity checks
- * are performed to restrict the values. Only the length is checked
- * according to the subtype restrictions.
- *
- * @returns An errno-like negative error code
- * @retval 0        Success
- * @retval -EINVAL  Invalid string (wrong length, wrong symbols)
- * @retval -EFAULT  Invalid pointer
- * @retval >0       any errno that calloc() is allowed to set
- */
-int fru_mr_mgmt_str2rec(fru_mr_rec_t **rec,
-                        const char *str,
-                        fru_mr_mgmt_type_t type);
+#define FRU_ATYPE_HAS_LANG(atype) (FRU_BOARD_INFO == (atype) || FRU_PRODUCT_INFO == (atype))
 
 /**
- * Take an input string, check that it looks like UUID, and pack it into
- * an "exploded" multirecord area record in binary form.
+ * @brief Debug flags to FRU decoding functions.
  *
- * @returns An errno-like negative error code
- * @retval 0        Success
- * @retval -EINVAL  Invalid UUID string (wrong length, wrong symbols)
- * @retval -EFAULT  Invalid pointer
- * @retval >0       any errno that calloc() is allowed to set
+ * Sometimes some vendors make errors in their FRU info files.
+ * These flags are needed to ignore those possible errors and
+ * load as much information as possible. Without these flags,
+ * the fru_loadfile() and fru_loadbuffer() will fail immediately
+ * upon detection of an error in the input.
  */
-int fru_mr_uuid2rec(fru_mr_rec_t **rec, const char *str);
+typedef enum {
+	FRU_NOFLAGS = 0, /**< No flags, operate normally */
+	FRU_IGNFVER = FRU__BIT(0), /**< Ignore FRU version in FRU header */
+	FRU_IGNFHCKSUM = FRU__BIT(1), /**< Ignore FRU header checksum */
+	FRU_IGNFDCKSUM = FRU__BIT(2), /**< Ignore FRU data checksum */
+	FRU_IGNAVER = FRU__BIT(3), /**< Ignore area version */
+	FRU_IGNRVER = FRU__BIT(4), /**< Ignore record version for
+	                           *    multirecord area */
+	FRU_IGNACKSUM = FRU__BIT(5), /**< Ignore area checksum */
+	FRU_IGNRHCKSUM = FRU__BIT(6), /**< Ignore record header checksum
+	                              * for multirecord area */
+	FRU_IGNRDCKSUM = FRU__BIT(7), /**< Ignore record data checksum
+	                              *   for multirecord area */
+	FRU_IGNRNOEOL = FRU__BIT(8), /**< Ignore absence of EOL-flagged
+	                             *   MR area record, use any previous
+	                             *   valid records */
+	FRU_IGNBIG = FRU__BIT(9), /**< Don't fail on binary file load if
+	                          *   the file is bigger than 64K,
+	                          *   attempt to load it anyway (may be dangerous) */
+	FRU_IGNAEOF = FRU__BIT(10), /**< Ignore no end-of-fields marker in info areas */
+	FRU_IGNMRVER = FRU__BIT(11), /**< Ignore invalid MR record version where possible */
+	FRU_IGNMRDATALEN = FRU__BIT(12), /**< Ignore invalid MR record data length where possible */
+} fru_flags_t;
+/** @} common */
 
 /**
- * Take an "exploded" multirecord area record in binary form and convert
- * it into a canonical UUID string if it's a Management UUID record
- * or return an error otherwise.
- *
- * @param[in,out] str  Pointer to a string to be allocated and filled in with
- *                     the decoded UUID
- * @param[in]     rec  Pointer to the input Management UUID record to decode
- * @returns An errno-like negative error code
- * @retval 0        Success
- * @retval -EINVAL  Not a UUID record
- * @retval -EFAULT  Invalid pointer
- * @rerval -ERANGE  Checksum error on record header or data
- * @retval >0       any errno that calloc() is allowed to set
+ * @addtogroup infocommon
+ * @{
  */
-int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *rec, fru_flags_t flags);
+
 
 /**
- * Take an "exploded" multirecord area record in binary form and convert
- * it into a canonical C string if it's a Management Access record
- * (except for Management Access System UUID record), or return an error
- * otherwise.
+ * @brief Copy string to the given field, perform length check
+ *        according to selected encoding, truncate if needed
  *
- * @param[in,out] str  Pointer to a string to be allocated and filled in with
- *                     the string value of the management record
- * @param[in]     rec  Pointer to the input Management Access record
- * @returns An errno-like negative error code
- * @retval 0        Success
- * @retval -EINVAL  Not a valid Management Access record or a UUID record
- * @retval -EFAULT  Invalid pointer
- * @rerval -ERANGE  Checksum error on record header or data
- * @retval >0       any errno that calloc() is allowed to set
+ * Attempt will be made to encode the input string using the requested
+ * encoding unless it is \ref FRU_FE_PRESERVE, in which event the function will
+ * attempt to preserve any valid encoding set in the target \a field. If
+ * the encoding in the target \a field in not valid then the function
+ * will behave as if \a encoding was set to \ref FRU_FE_AUTO.
+ *
+ * If the encoding attempt succeeds, the input string and the requested
+ * encoding value will be copied into the given \a field. The string will be
+ * truncated to fit and the truncation event will be indicated via \ref
+ * fru_errno as \ref FELONGINPUT along with success return code. Please set
+ * \ref fru_errno to 0 before the call to avoid false positive checks for
+ * truncation.
+ *
+ * @param[in, out] field     Pointer to a decoded field (typically inside a
+ *                           member of fru_t)
+ * @param[in]      encoding  Desired encoding.
+ * @param[in]      string    The input string to set the field to.
+ * @returns Success status
+ * @retval true Success, check \ref fru_errno for \ref FELONGINPUT to
+ *              see if data was truncated
+ * @retval false Failure, \ref fru_errno is set to one of:
+ *               - \ref FERANGE
+ *               - \ref FENONPRINT
+ *               - \ref FENONHEX
+ *               - \ref FENOTEVEN
+ *               - \ref FEBADENC
+ *
+ * @ingroup infocommon
  */
-int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
-                        fru_flags_t flags);
+bool fru_setfield(fru_field_t * field,
+                  fru_field_enc_t encoding,
+                  const char * string);
 
 /**
- * Take an "exploded" multirecord area record in binary form and convert
- * it into a canonical C string containing a hex text representation of
- * the record's data.
+ * @brief Get a pointer to a mandatory field in the info area of the
+ *        given type in the given fru structure
  *
- * @param[in,out] str  Pointer to a string to be allocated and filled in with
- *                     the hexstring value of the record's data
- * @param[in]     rec  Pointer to the input MR area record
- * @returns An errno-like negative error code
- * @retval 0        Success
- * @retval -EINVAL  Not a valid Management Access record or a UUID record
- * @retval -EFAULT  Invalid pointer
- * @rerval -ERANGE  Checksum error on record header or data
- * @retval >0       any errno that calloc() is allowed to set
+ * Finds the mandatory string field at the given index and returns a pointer
+ * to it, so that \ref fru_setfield() could be used on it.
+ *
+ * Only gets fru_field_t compatible fields. Doesn't work on area-specific
+ * non-string fields like `board.tv`, `board.lang`, `chassis.type`, etc.
+ *
+ * The first fru_field_t compatible field in any info area is considered
+ * to be at index 0.
+ *
+ * This function is useful when you want to iterate over all the string-like
+ * standard fields and don't care much about their designation (or probably
+ * define those associations externally).
+ *
+ * You may as well use it to get specific fields by specifying as \a index
+ * the values of \ref fru_chassis_field_t, \ref fru_board_field_t, or \ref
+ * fru_prod_field_t depending on which \a atype is specified. On the other
+ * hand, for such a case it may be easier to directly access the corresponding
+ * field in an area structure (e.g., `fru->board.serial`).
+ *
+ * @param[in] fru The decoded FRU information structure to search in
+ * @param[in] atype Type of the area to search in \a fru. Only supports
+ *                  'info' areas with mandatory fields, namely:
+ *                  - \ref FRU_CHASSIS_INFO
+ *                  - \ref FRU_BOARD_INFO
+ *                  - \ref FRU_PRODUCT_INFO
+ * @param[in] index The index of the custom field to fetch
+ *
+ * @returns A pointer to the mandatory field at the requested index or \a NULL
+ *          in the event of failure. For the latter case \ref fru_errno is set to:
+ *           - \ref FEAREANOTSUP
+ *           - \ref FEAREABADTYPE
+ *           - \ref FENOFIELD
+ *
+ * @ingroup infocommon
  */
-int fru_mr_rec2hexstr(char **str, fru_mr_rec_t *rec,
-                      fru_flags_t flags);
+fru_field_t * fru_getfield(const fru_t * fru,
+                           fru_area_type_t atype,
+                           size_t index);
+/**
+ * @brief Add a custom field to the given area type in the
+ *        given fru structure
+ *
+ * Allocates a new custom fields list entry for the given area
+ * type within the decoded \a fru structure and calls fru_setfield()
+ * on it with the given input \a string.
+ *
+ * The new record is added/inserted at the given \a index in the list.
+ * 
+ * Automatically sets `fru->presence[atype] = true`
+ *
+ * @param[in] fru The decoded FRU information structure to modify.
+ * @param[in] index Index in the custom record list at which to add the new
+ *                  record. Specify \ref FRU_LIST_TAIL to add the new
+ *                  record at the end of the list, or \ref FRU_LIST_HEAD
+ *                  to insert it at the head.
+ * @param[in] atype Type of the area to modify in \a fru. Only supports
+ *                  areas that can have custom fields by specification,
+ *                  namely:
+ *                  - \ref FRU_CHASSIS_INFO
+ *                  - \ref FRU_BOARD_INFO
+ *                  - \ref FRU_PRODUCT_INFO
+ * @param[in] encoding Desired encoding. Can't use \ref FRU_FE_PRESERVE here.
+ *                     Use only the standard encodings here or FRU_FE_EMPTY
+ *                     to add an empty field to be set later with
+ *                     \ref fru_setfield()
+ * @param[in] string The input string to add as a custom field.
+ *
+ * @returns A pointer to the added field, see \ref fru_setfield() for info
+ *          on possible errors
+ * @retval NULL Failure, additionally may set \ref fru_errno to:
+ *               - \ref FEAREANOTSUP
+ *               - \ref FEAREABADTYPE
+ *
+ * @ingroup infocommon
+ */
+fru_field_t * fru_add_custom(fru_t * fru,
+                             fru_area_type_t atype,
+                             size_t index,
+                             fru_field_enc_t encoding,
+                             const char * string);
 
 /**
- * Allocate and build an Internal Use Area block.
+ * @brief Get a pointer to a custom data field in the area of the
+ *        given type in the given fru structure
  *
- * The function will allocate a buffer of size that is a muliple of 8 bytes
- * and is big enough to accomodate the standard area header and the area data.
+ * Finds the custom field at the given index and returns a pointer
+ * to it, so that \ref fru_setfield() could be used on it.
  *
- * It is safe to free (deallocate) any arguments supplied to this function
- * immediately after the call as all the data is copied to the new buffer.
+ * @param[in] fru The decoded FRU information structure to search in.
+ * @param[in] atype Type of the area to search in \a fru. Only supports
+ *                  areas that can have custom fields by specification,
+ *                  namely:
+ *                  - \ref FRU_CHASSIS_INFO
+ *                  - \ref FRU_BOARD_INFO
+ *                  - \ref FRU_PRODUCT_INFO
+ * @param[in] index The index of the custom field to fetch
  *
- * Don't forget to free() the returned buffer when you don't need it anymore.
+ * @returns A pointer to the custom field at the requested index or \a NULL
+ *          in the event of failure. For the latter case \ref fru_errno is set to:
+ *           - \ref FEAREANOTSUP
+ *           - \ref FEAREABADTYPE
+ *           - \ref FENOFIELD
  *
- * @param[in] data The internal use area data as a hex string (e.g. "DEADBEEF")
- * @param[out] blocks The size of the resulting area in FRU blocks
- * @returns fru_internal_use_area_t *area A newly allocated buffer containing
- *                                        the created area
+ * @ingroup infocommon
  */
-fru_internal_use_area_t *fru_encode_internal_use_area(const void *data, uint8_t *blocks);
+fru_field_t * fru_get_custom(const fru_t * fru,
+                             fru_area_type_t atype,
+                             size_t index);
 
 /**
- * @brief Encode chassis info into binary buffer.
+ * @brief Delete a custom data field in the area of the
+ *        given type in the given fru structure
  *
- * Binary buffer needs to be freed after use.
+ * Finds the custom field at the given index and deletes it
+ * from the list, deallocates memory.
  *
- * @param[in] chassis Area info.
- * @return Encoded area buffer.
- * @retval NULL Encoding failed. \p errno is set accordingly.
+ * @param[in] fru The decoded FRU information structure to modify.
+ * @param[in] atype Type of the area to modify in \a fru. Only supports
+ *                  areas that can have custom fields by specification,
+ *                  namely:
+ *                  - \ref FRU_CHASSIS_INFO
+ *                  - \ref FRU_BOARD_INFO
+ *                  - \ref FRU_PRODUCT_INFO
+ * @param[in] index The index of the custom field to fetch
+ *
+ * @returns Success status
+ * @retval true The requested cusom field has been deleted
+ * @retval false There was an error, see \ref fru_errno :
+ *                - \ref FEAREANOTSUP
+ *                - \ref FEAREABADTYPE
+ *                - \ref FENOFIELD
+ *
+ * @ingroup infocommon
  */
-fru_chassis_area_t * fru_encode_chassis_info(fru_exploded_chassis_t *chassis);
+bool fru_delete_custom(fru_t * fru,
+                       fru_area_type_t atype,
+                       size_t index);
+
+/** @} infocommon */
 
 /**
- * @brief Encode board info into binary buffer.
- *
- * Binary buffer needs to be freed after use.
- *
- * @param[in] board Area info.
- * @return Encoded area buffer.
- * @retval NULL Encoding failed. \p errno is set accordingly.
+ * @addtogroup common
+ * @{
  */
-fru_board_area_t * fru_encode_board_info(fru_exploded_board_t *board);
+
+/** A convenience macro to get the size of an array in elements */
+#define FRU_ARRAY_SZ(a) (sizeof(a) / sizeof((a)[0]))
+
+/// Add entry at the head of the list, used by fru_add_mr() and alike
+#define FRU_LIST_HEAD 0
+/// Add entry at the end of the list, used by fru_add_mr() and alike
+#define FRU_LIST_TAIL INT_MAX
+
+
+/** Define FRU area position in the binary file
+ *
+ * Use with fru_enable_area() and fru_move_area().
+ *
+ * The order and meaning of non-negative values matches that
+ * of \ref fru_area_type_t and follows the FRU specification.
+ * It is always safe to compare variables of the two types
+ * as well as type cast one to another if the value of
+ * fru_area_position_t is non-negative.
+ */
+typedef enum {
+	FRU_APOS_LAST = -3, /**< Put an area last in the order */
+	FRU_APOS_FIRST = -2, /**< Put an area first in the order */
+	FRU_APOS_AUTO = -1, /**< Position an area automatically as per
+	                     *   the default order given in FRU Spec */
+	FRU_AFTER_INTERNAL, /**< Put an area after Internal Use Area */
+	FRU_APOS_MIN = FRU_AFTER_INTERNAL, /**< Minimum 'real' position */
+	FRU_AFTER_CHASSIS, /**< Put an area after Chassis Info Area */
+	FRU_AFTER_BOARD, /**< Put an area after Board Info Area */
+	FRU_AFTER_PRODUCT, /**< Put an area after Product Info Area */
+	FRU_AFTER_MR, /**< Put an area after Multirecord Area */
+	FRU_APOS_MAX = FRU_AFTER_MR, /**< Maximum 'real' position */
+} fru_area_position_t;
+#define FRU_IS_APOS_VALID(pos) (FRU_APOS_LAST <= (pos) && (pos) <= FRU_APOS_MAX)
+
 
 /**
- * @brief Encode product info into binary buffer.
+ * @brief Convert 2 first bytes of hex string into a binary byte.
  *
- * Binary buffer needs to be freed after use.
+ * This is just a convenience utility function, not directly
+ * related to FRU.
  *
- * @param[in] product Area info.
- * @return Encoded area buffer.
- * @retval NULL Encoding failed. \p errno is set accordingly.
+ * @returns A byte converted from hex string (in the lower 8 bits)
+ *          or a -1 for an error.
+ * @retval -1 An error occured. \ref fru_errno / \p errno are set accordingly:
+ *            FENONHEX - A non-hex character encountered in the
+ *                       first two bytes of \a hex.
+ *            FEGENERIC/EFAULT - \a hex was NULL
+ *
+ * @ingroup common
  */
-fru_product_area_t * fru_encode_product_info(fru_exploded_product_t *product);
+int16_t fru_hex2byte(const char * hex);
 
 /**
- * Allocate and build a MultiRecord area block.
+ * @brief Initialize/allocate a fru structure
  *
- * The function will allocate a buffer of size that is required to store all
- * the provided data and accompanying record headers. It will calculate data
- * and header checksums automatically.
+ * Initializes a statically allocated fru structure for later modification
+ * and saving with fru_savebuffer() or fru_savefile().
  *
- * All data will be copied as-is, without any additional encoding, the name
- * `encode` is given for consistency with the functions that build
- * other areas.
+ * If a fru is \p NULL, then a new FRU structure is allocated, otherwise
+ * the supplied one will be initialized. Any previously existing values
+ * or pointers will be reset, so make sure to never call this function
+ * on a previously loaded or otherwise actively used fru structure as
+ * that may result in memory leakage.
  *
- * It is safe to free (deallocate) any arguments supplied to this function
- * immediately after the call as all the data is copied to the new buffer.
+ * In the initialized structure:
+ *   - All mandatory fields in all areas are set to empty strings;
+ *   - All custom field list pointers are set to NULL (empty lists);
+ *   - Board manufacturing date is set to current date;
+ *   - Chassis type is set to 'Rack mount' (0x17);
+ *   - Area order is set to default:
+ *       1. Internal Use Area
+ *       2. Chassis Information Area
+ *       3. Board Information Area
+ *       4. Product Information Area
+ *       5. Multirecord Area
+ *   - All areas are marked non-present.
  *
- * Don't forget to free() the returned buffer when you don't need it anymore.
+ * @param[in, out] fru Pointer to an initial FRU structure (can be \p NULL)
  *
- * @returns fru_mr_area_t *area  A newly allocated buffer containing the
- *                               created area
- *
+ * @returns A pointer to the initialized fru_t structure.
+ * @retval NULL Error detected. \ref fru_errno is set accordingly.
  */
-fru_mr_area_t * fru_encode_mr_area(fru_mr_reclist_t *reclist, size_t *total);
-
-fru_t * fru_create(fru_area_t area[FRU_MAX_AREAS], size_t *size);
-
-/**
- * @brief Find and validate FRU header in the byte buffer.
- *
- * @param[in] buffer Byte buffer.
- * @param[in] size Byte buffer size.
- * @return Pointer to the FRU header in the buffer.
- * @retval NULL FRU header not found. \p errno is set accordingly.
- */
-fru_t *find_fru_header(uint8_t *buffer, size_t size, fru_flags_t flags);
+fru_t * fru_init(fru_t * fru);
 
 /**
- * @brief Find and validate FRU chassis area in the byte buffer.
+ * @brief Load FRU information from a binary file.
  *
- * @param[in] buffer Byte buffer.
- * @param[in] size Byte buffer size.
- * @return Pointer to the FRU chassis area in the buffer.
- * @retval NULL FRU chassis area not found. \p errno is set accordingly.
+ * Takes a binary FRU information file (e.g. EEPROM dump or the output of
+ * `ipmitool fru read`, and loads it as a fru_t structure for further
+ * modification.
+ *
+ * If \a fru is \p NULL, then a new FRU structure is allocated, otherwise
+ * the supplied one will be filled in, and the existing values will be
+ * overwritten with the contents of the file. The function will fail if
+ * `fru_t.internal`, `fru_t.mr`, or any of the `cust` lists in the info
+ * area members of \a fru are non-NULL.
+ *
+ * Supported are:
+ *  - All generic info areas (chassis, board, product),
+ *    including the custom fields (decoded as hex strings of FRU_FE_BINARY
+ *    encoding type)
+ *  - Internal Use area (decoded as hex string)
+ *  - Multirecord area:
+ *    - Management Access record:
+ *      - System Unique ID (UUID), treated as per SMBIOS definition,
+ *        decoded as a big-endian hex string
+ *      - All other MA types, as plain text strings
+ *    - All other types of MR records as 'raw' records
+ *
+ * @note On load, if there was a manufacturing date/time specified for
+ *       the board information area, then \a fru->board.tv_auto will be
+ *       set to \p false. Otherwise that option will be set to \p true.
+ *
+ * @param[in, out] fru Pointer to an initial FRU structure (can be \p NULL)
+ * @param[in] filename Name of the file to load
+ * @param[in] flags flags or FRU_NOFLAGS
+ *
+ * @returns A pointer to the filled in fru_t structure.
+ * @retval NULL Error detected. \ref fru_errno is set accordingly.
  */
-fru_chassis_area_t *find_fru_chassis_area(uint8_t *buffer, size_t size, fru_flags_t flags);
+fru_t * fru_loadfile(fru_t * fru,
+                     const char * filename,
+                     fru_flags_t flags);
 
 /**
- * @brief Find and validate FRU board area in the byte buffer.
+ * @brief Load FRU information from a binary file.
  *
- * @param[in] buffer Byte buffer.
- * @param[in] size Byte buffer size.
- * @return Pointer to the FRU board area in the buffer.
- * @retval NULL FRU board area not found. \p errno is set accordingly.
+ * Same as fru_loadfile(), but takes a binary buffer as input.
+ * In fact, fru_loadfile() calls this one under the hood
+ * after memory-mapping the binary FRU file.
+ *
+ * @param[in, out] fru Pointer to an initial FRU structure (can be \p NULL)
+ * @param[in] buf Buffer containing a binary FRU information file
+ * @param[in] size Buffer size
+ * @param[in] flags Debug flags or \ref FRU_NOFLAGS
+ *
+ * @returns A pointer to the filled in fru_t structure.
+ * @retval NULL Error detected. \ref fru_errno is set accordingly.
  */
-fru_board_area_t *find_fru_board_area(uint8_t *buffer, size_t size, fru_flags_t flags);
-
-/**
- * @brief Find and validate FRU product area in the byte buffer.
- *
- * @param[in] buffer Byte buffer.
- * @param[in] size Byte buffer size.
- * @return Pointer to the FRU product area in the buffer.
- * @retval NULL FRU product area not found. \p errno is set accordingly.
- */
-fru_product_area_t *find_fru_product_area(uint8_t *buffer, size_t size, fru_flags_t flags);
-
-/**
- * Find an Internal Use area in the supplied FRU \a buffer of the
- * given \a size.
- *
- * @param[in]  buffer   Pointer to the FRU data
- * @param[in]  size     Size of the FRU \a buffer
- * @param[out] iu_size  Detected size of the found Internal Use area
- * @param[in]  flags    Debug flags to skip certain checks
- *
- * @returns A pointer to the internal use area within the \a buffer, detected
- *          size of the area is stored in \a iu_size.
- * @retval NULL An error has occured, errno indicates the problem, \a iu_size equals 0
- * @retval non-NULL A pointer to the found multi-record area start
- */
-fru_internal_use_area_t *find_fru_internal_use_area(
-	uint8_t *buffer, size_t *ia_size, size_t size, fru_flags_t flags);
-
-/**
- * Find a multirecord area in the supplied FRU \a buffer of the
- * given \a size.
- *
- * @param[in]  buffer   Pointer to the FRU data
- * @param[in]  size     Size of the FRU \a buffer
- * @param[out] mr_size  Detected size of the found Multirecord area
- * @param[in]  flags    Debug flags to skip certain checks
- *
- * @returns A pointer to the multi-record area within the \a buffer
- * @retval NULL An error has occured, errno indicates the problem
- * @retval non-NULL A pointer to the found multi-record area start
- */
-fru_mr_area_t *find_fru_mr_area(uint8_t *buffer, size_t *mr_size, size_t size, fru_flags_t flags);
-
-/**
- * @brief Decode chassis area into \p fru_exploded_chassis_t.
- *
- * @param[in] area Encoded area.
- * @param[out] chassis_out Decoded structure.
- * @retval true Success.
- * @retval false Failure.
- */
-bool fru_decode_chassis_info(const fru_chassis_area_t *area, fru_exploded_chassis_t *chassis_out);
-
-/**
- * @brief Decode board area into \p fru_exploded_board_t.
- *
- * @param[in] area Encoded area.
- * @param[out] chassis_out Decoded structure.
- * @retval true Success.
- * @retval false Failure.
- */
-bool fru_decode_board_info(const fru_board_area_t *area, fru_exploded_board_t *board_out);
-
-/**
- * @brief Decode product area into \p fru_product_board_t.
- *
- * @param[in] area Encoded area.
- * @param[out] chassis_out Decoded structure.
- * @retval true Success.
- * @retval false Failure.
- */
-bool fru_decode_product_info(const fru_product_area_t *area, fru_exploded_product_t *product_out);
-
-/**
- * @brief Decode multirecord area from \p fru_mr_area_t into a record list
- *
- * @param[in] area Encoded area.
- * @param[out] mr_reclist Pointer to the record list head
- * @returns The number of records decoded from the multirecord are into the list
- * @retval -1 - Failure, errno is set accordingly.
- * @retval >= 0 - The number of records added to \a mr_reclist
- */
-int fru_decode_mr_area(const fru_mr_area_t *area,
-                       fru_mr_reclist_t **reclist,
-                       size_t mr_size,
+fru_t * fru_loadbuffer(fru_t * fru,
+                       const void * buf,
+                       size_t size,
                        fru_flags_t flags);
 
-/**
- * @brief Decode internal use area \a area into a hex string
- *
- * The function allocates a string buffer that a caller must free()
- * when not needed anymore.
- *
- * @param[in]  area     Encoded area.
- * @param[in]  area_len The full area length as calculated by \p find_fru_internal_use_area()
- * @param[out] out      Pointer to a string buffer to be allocated and filled in with the data
- * @param[in]  flags    The debug flags (unused here)
- * @returns The boolean success indicator
- * @retval true  - Success
- * @retval false - An error occured, errno is set accordingly
- */
-bool fru_decode_internal_use_area(const fru_internal_use_area_t *area,
-                                  size_t area_len,
-                                  char **out,
-                                  fru_flags_t flags __attribute__((unused)));
 
+/** @brief Wipe the contents of a fru_t structure
+ *
+ * Will free any memory allocated by fru_loadfile(), fru_loadbuffer(),
+ * fru_add_mr(), and fru_add_custom() functions for the members of \a fru.
+ * Any deallocated members will be set to NULL.
+ *
+ * Will zero all fields of \a fru, but will not free \a fru itself to allow
+ * for static allocation of the top-level structure. If it was dynamically
+ * allocated (e.g, by a call to fru_loadfile() with \p NULL for \a fru
+ * argument), then your are to explicitly call \p free() on it after calling
+ * fru_wipe().
+ *
+ * If you're only dealing with dynamically allocated fru structures, consider
+ * using \ref fru_free() instead.
+ *
+ * @param[in, out] fru Pointer to a FRU structure to free
+ */
+void fru_wipe(fru_t * fru);
+
+/** @brief Deallocate a dynamically allocated fru structure
+ *
+ * Same as \ref fru_wipe(), but also deallocates the \a fru
+ * structure itself. Use on dynamically allocated structures
+ * only.
+ *
+ * Sets \a fru to NULL upon successful deletion.
+ *
+ * @param[in] fru Pointer to the decoded FRU information structure to delete
+ */
+#define fru_free(fru) do { fru_wipe(fru); zfree(fru); } while(0)
 
 /**
- * Decode data from a buffer into another buffer.
+ * @brief Enable a previously disabled / non-present area
  *
- * For binary data use FRU_FIELDDATALEN(field->typelen) to find
- * out the size of valid bytes in the returned buffer.
+ * Marks the requested area type as present and sets up its order
+ * relative to other areas as requested. Can either position the
+ * \a area automatically if \a after is \ref FRU_APOS_AUTO, or put
+ * it at the requested position. See \ref fru_area_position_t for
+ * the values of \a after.
  *
- * @param[in] field Encoded data field.
- * @param[out] out Decoded field.
- * @retval true Success.
- * @retval false Failure.
+ * If the area specified by \a after is not enabled, then the
+ * function will behave as if \a after was \ref FRU_APOS_AUTO.
+ *
+ * When \a after is \ref FRU_APOS_AUTO, the area will be put:
+ *   - At the head of the list if \a area is \ref FRU_INTERNAL_USE, or
+ *   - After the area immediately preceding \a area in the
+ *     IPMI FRU Specification, if such an area is enabled, or
+ *   - After the area of the highest order that is less than
+ *     that of \a area according to IPMI FRU Specification
+ *
+ * Thus, if you always use \ref FRU_APOS_AUTO, all areas will be
+ * then saved in the the natural order of their respective
+ * offset locations in the FRU header, as per the specification.
+ * That is:
+ *   1. Internal Use Area
+ *   2. Chassis Info Area
+ *   3. Board Info Area
+ *   4. Product Info Area
+ *   5. Multirecord Area
+ *
+ * It is advised that you first enable areas that you want to
+ * be in the natural order, then enable the areas that you want
+ * to go after some other specific areas, and finally enable
+ * the ones that you want to go first or last.
+ *
+ * Otherwise, if you, for example, first enable \ref FRU_BOARD_INFO
+ * to go after \ref FRU_PRODUCT_INFO, and then enable \ref FRU_MR with
+ * \ref FRU_APOS_AUTO, then MR area will be placed between the
+ * product and board areas, which may be contrary to what you
+ * intended.
+ *
+ * Alternatively, you may set the order manually by modifying
+ * `fru->order` array, but be careful there.
+ *
+ * @note The function will fail if the area is already enabled.
+ *       Use fru_move_area() if you want to move an enabled area
+ *       to a new position.
+ *
+ * @param[in, out] fru A pointer to the FRU structure to modify
+ * @param[in] area The area type to enable
+ * @param[in] after An area position where to put the enabled area,
+ *                  or \ref FRU_APOS_AUTO for automatic placement.
+ *                  Specify \ref FRU_APOS_FIRST to make the enableed area
+ *                  first or \ref FRU_APOS_LAST to make it last.
+ *                  Use any of `FRU_AFTER_*` to select a relative position.
+ * @returns A success status
+ * @retval true Success
+ * @retval false Error, see \ref fru_errno for details
  */
-bool fru_decode_data(fru_field_t *field, decoded_field_t *out);
+bool fru_enable_area(fru_t * fru,
+                     fru_area_type_t area,
+                     fru_area_position_t after);
+
+/**
+ * @brief Disable a previously enabled / present area
+ *
+ * Marks the requested area type as non-present and resets its order
+ * relative to other areas. Disabled areas will not be saved by
+ * \ref fru_savefile() or \ref fru_savebuffer().
+ *
+ * @note This function does NOT delete any area data, it just
+ *       marks it disabled. You may then re-enable it back
+ *       using fru_enable_area(), and all the data will stay
+ *       in place.
+ *
+ * @param[in, out] fru A pointer to the FRU structure to modify
+ * @param[in] atype The area type to disable
+ * @returns A success status
+ * @retval true Success, will also set \ref fru_errno to FEADISABLED
+ *              if the area was already disabled before the call
+ * @retval false Error, see \ref fru_errno for details
+ */
+bool fru_disable_area(fru_t * fru, fru_area_type_t atype);
+
+/**
+ * @brief Move an enabled/present area
+ *
+ * Effectively performs a call to \ref fru_disable_area() followed
+ * by a call to \ref fru_enable_area(), but will fail on already
+ * disabled areas unlike the former.
+ *
+ * See the description for \ref fru_enable_area() for the info on
+ * this function's arguments and return values.
+ */
+bool fru_move_area(fru_t * fru,
+                   fru_area_type_t area,
+                   fru_area_position_t after);
+
+/**
+ * @brief Encode a FRU info structure into a binary buffer
+ *
+ * If \a buf is \p NULL, allocates a new one.
+ * Always calculates the resulting size and stores it in \a size
+ * in the event of successful completion.
+ *
+ * @param[in] fru The FRU information structure to encode/export
+ * @param[in,out] bufptr Pointer to a buffer to save the binary FRU
+ *                       information file to (allocated if \p NULL)
+ * @param[in,out] size Pointer to the size of the output buffer
+ *                     (size is adjusted upon return to the actual
+ *                     size of the encoded data).
+ *                     The input value pointed to by \a size can
+ *                     be 0 if \a bufptr is \p NULL.
+ *
+ * @returns Encoding status
+ * @retval true Encoded successfully, \a size adjusted.
+ * @retval false Failed to encode. \ref fru_errno is set accordingly.
+ */
+bool fru_savebuffer(void ** bufptr, size_t * size, const fru_t * fru);
+
+/**
+ * @brief Encode a FRU info structure into a binary file
+ *
+ * Creates/overwrites the specified file with the encoded FRU info
+ * data. Calls fru_savebuffer() under the hood.
+ *
+ * @param[in] fru The decoded FRU information structure to encode
+ * @param[in] fname Name of the file to create
+ *
+ * @returns Success status
+ * @retval true Encoded and written successfully.
+ * @retval false Failed to encode or write, \ref fru_errno is set accordingly.
+ */
+bool fru_savefile(const char * fname, const fru_t * fru);
+
+/** @} common */
+
+/**
+ * @addtogroup multirec
+ * @{
+ */
+
+/** MultiRecord Area Record Types (Table 16-2)
+ *
+ * The \p ASF_* types are per Alert Standard Format Spec rev 2.0 (DSP0136).
+ *
+ * The \p NVME_* types are per NVME-MI Spec rev 1.2b, section 8.2.
+ */
+typedef enum {
+	FRU_MR_ANY = -2, /**< Any MR Record type, for use with fru_find_mr() only */
+	FRU_MR_EMPTY = -1, /**< MR Record is empty, will be skipped during saving */
+	FRU_MR_MIN = 0x00, /**< The minimum valid MR record type that can be saved */
+	FRU_MR_PSU_INFO = 0x00, /**< PSU Information */
+	FRU_MR_DC_OUT = 0x01, /**< DC Output */
+	FRU_MR_DC_LOAD = 0x02, /**< DC Load */
+	FRU_MR_MGMT_ACCESS = 0x03, /**< Management Access Record */
+	FRU_MR_BCR = 0x04, /**< Base Compatibility Record */
+	FRU_MR_ECR = 0x05, /**< Extended Compatibility Record */
+
+	FRU_MR_ASF_FIXED_SMBUS = 0x06, /**< ASF Fixed SMBus Addresses */
+	FRU_MR_ASF_LEGACY_ALERTS = 0x07, /**< ASF Lecacy-Device Alerts */
+	FRU_MR_ASF_REMOTE_CTRL = 0x08, /**< ASF Remote Control */
+
+	FRU_MR_EXT_DC_OUT = 0x09, /**< Extended DC Output */
+	FRU_MR_EXT_DC_LOAD = 0x0A, /**< Extended DC Load */
+
+	FRU_MR_NVME = 0x0B, /**< NVMe Information */
+	FRU_MR_NVME_PCIE_PORT = 0x0C, /**< NVMe PCIe Port */
+	FRU_MR_NVME_TOPOLOGY = 0x0D, /**< NVMe Topolgy */
+	FRU_MR_NVME_RSVD_E = 0x0E, /**< Reserved */
+	FRU_MR_NVME_RSVD_F = 0x0F, /**< Reserved */
+
+	FRU_MR_OEM_START = 0xC0, /**< Start of OEM range */
+	FRU_MR_OEM_END = 0xFF, /**< End of OEM range */
+	FRU_MR_MAX = FRU_MR_OEM_END, /**< The maximum valid MR record type that can be saved */
+	FRU_MR_RAW, /**< The `raw` type. Any of the above types that aren't yet directly supported */
+	FRU_MR_TYPE_COUNT /**< Total number of MR record types */
+} fru_mr_type_t;
+
+/** The FRU_MR_RAW is not considered a valid type, must be checked separately */
+#define FRU_MR_IS_VALID_TYPE(t) (FRU_MR_MIN <= (t) && (t) <= FRU_MR_MAX)
+
+/** The total number of possible OEM types to Multirecord area records */
+#define FRU_MR_OEM_COUNT (FRU_MR_OEM_END - FRU_MR_OEM_START + 1)
+
+/** An OEM Multirecord area type, make sure that \a n is less than FRU_MR_OEM_COUNT */
+#define FRU_MR_OEM(n) (FRU_MR_OEM_START + (n))
+
+/** @cond PRIVATE */
+#define FRU__FILE_MRR_MAXDATA (UINT8_MAX) /**< Maximum length of MR record data (encoded) */
+
+/**< Mfg. ID for OEM MR records is 3 bytes, see Section 18.7 */
+#define FRU__FILE_MRR_OEM_MFGID_LEN 3
+/** @endcond */
+
+/**
+ * Maximum length of OEM MR record data in decoded
+ * form (NUL-terminated hex string)
+ */
+/*
+ * Encoded data must not exceed maximum possible MR record
+ * data size. That's why we subtract the MFG ID length.
+ */
+#define FRU_MRR_OEM_MAXDATA \
+	((FRU__FILE_MRR_MAXDATA - FRU__FILE_MRR_OEM_MFGID_LEN) * 2 + 1)
+
+/** Maximum length of Custom/Raw MR record data in decoded
+ * form (NUL-terminated hex string)
+ */
+#define FRU_MRR_RAW_MAXDATA \
+	(FRU__FILE_MRR_MAXDATA * 2 + 1)
+
+/**
+ * @brief Management Access Record subtypes (Table 18-6)
+ */
+typedef enum {
+	FRU_MR_MGMT_INVALID = 0x00, /**< Invalid subtype, do not use */
+	FRU_MR_MGMT_MIN = 0x01, /**< The minimum valid (real) subtype */
+	FRU_MR_MGMT_SYS_URL = 0x01,  /**< System URL */
+	FRU_MR_MGMT_SYS_NAME = 0x02, /**< System Name */
+	FRU_MR_MGMT_SYS_PING = 0x03, /**< System Ping Address */
+	FRU_MR_MGMT_COMPONENT_URL = 0x04,  /**< Component URL */
+	FRU_MR_MGMT_COMPONENT_NAME = 0x05, /**< Component Name */
+	FRU_MR_MGMT_COMPONENT_PING = 0x06, /**< Component Ping Address */
+	FRU_MR_MGMT_SYS_UUID = 0x07, /**< System Unique ID */
+	FRU_MR_MGMT_MAX = FRU_MR_MGMT_SYS_UUID, /**< The maximum valid subtype */
+	FRU_MR_MGMT_INDEX_COUNT = FRU_MR_MGMT_MAX, /**< The count of 0-based indices of valid subtypes,
+	                                            *   can be used as an array dimension.
+	                                            */
+} fru_mr_mgmt_type_t;
+
+/** Is the MR management access record subtype \a mt valid? */
+#define FRU_MR_MGMT_IS_SUBTYPE_VALID(mt) ((mt) >= FRU_MR_MGMT_MIN && (mt) <= FRU_MR_MGMT_MAX)
+
+/**
+ * Convert a valid MR Management Access Record subtype into
+ * a 0-based index or into -1 if \a mt is not a valid subtype
+ */
+#define FRU_MR_MGMT_SUBTYPE_TO_IDX(mt) (FRU_MR_MGMT_IS_SUBTYPE_VALID(mt) \
+                                        ? (int)((mt) - FRU_MR_MGMT_MIN) \
+                                        : -1)
+/**
+ * Convert a valid 0-based index into an MR Management Access Record
+ * subtype or to \ref FRU_MR_MGMT_INVALID if the result would not be a valid subtype
+ */
+#define FRU_MR_MGMT_IDX_TO_SUBTYPE(i)  (((i) >= 0 && (i) <= FRU_MR_MGMT_MAX) \
+                                        ? ((i) + FRU_MR_MGMT_MIN) \
+                                        : FRU_MR_MGMT_INVALID)
+
+/**
+ * NVMe Form-Factor, see NVMe-MI Spec rev 1.2b, Figure 160
+ *
+ * Not yet implemented
+ */
+typedef enum {
+	FRU_NVME_FF_UNKNOWN = 0,
+} fru_nvme_ff_t;
+
+/** @cond PRIVATE */
+
+/** Just the subtype byte length */
+#define FRU__FILE_MR_MGMT_HDR_LEN (sizeof(uint8_t))
+
+/** Maximum length of MR Management Access record data (encoded) */
+#define FRU__FILE_MR_MGMT_MAXDATA \
+	(FRU__FILE_MRR_MAXDATA - FRU__FILE_MR_MGMT_HDR_LEN)
+
+/** @endcond */
+
+/** Maximum length of data in MR Management Access record */
+/*
+ * All management subtype records are plain text strings,
+ * and even UUID, which is binary, in decoded form is
+ * represented as a sting of 32 hex digits, which is at
+ * least twice less than the maximum length for any of the
+ * plain text subtypes.
+ *
+ * Hence, encoded and decoded lengths for plain text strings
+ * are the same, we just use the max encoded length here
+ */
+#define FRU_MR_MGMT_MAXDATA (FRU__FILE_MR_MGMT_MAXDATA)
+
+/**
+ * @brief MultiRecord area record type
+ *
+ * Describes a record of any supported multirecord area record type
+ * in decoded form. Comprises a number of type-specific structs
+ * combined in a union. You only need to fill in the fields of the struct
+ * that correspond to the selected record \a type.
+ *
+ * All byte arrays are stored as hex strings in this structure.
+ * All integer types are stored as host-endian integers.
+ * All string types are stored as C-strings.
+ *
+ * \b Example
+ *
+ * ```
+ * fru_recrec_t rec = {};
+ * const int mr_myoem_type = FRU_MR_OEM_START + 1;
+ *
+ * rec.type = mr_myoem_type;
+ * rec.oem.type = FRU_FE_TEXT;
+ * strncpy(rec.oem.data, "Some OEM data", sizeof(rec.oem.data));
+ *
+ * // Alternatively:
+ *
+ * rec.type = mr_myoem_type;
+ * rec.oem.type = FRU_FE_BINARY;
+ * strncpy(rec.oem.data, "01020304DEADC0DE", sizeof(rec.oem.data));
+ * ```
+ */
+typedef struct {
+	fru_mr_type_t type; /**< Record Type */
+	union {
+		/** PSU Information, see IPMI FRU spec section 18.1 */
+		/** TODO: Not yet implemented */
+		struct {
+		} psu;
+		/** DC Output, see IPMI FRU spec section 18.2 */
+		/** TODO: Not yet implemented */
+		struct {
+		} dco;
+		/** Extended DC Output, see IPMI FRU spec section 18.2a */
+		/** TODO: Not yet implemented */
+		struct {
+		} edco;
+		/** DC Load, see IPMI FRU spec section 18.3 */
+		/** TODO: Not yet implemented */
+		struct {
+		} dcl;
+		/** Extended DC Load, see IPMI FRU spec section 18.3a */
+		/** TODO: Not yet implemented */
+		struct {
+		} edcl;
+		/** Management Access Record, see IPMI FRU spec section 18.4 */
+		struct {
+			/** Management Access Record subtype */
+			fru_mr_mgmt_type_t subtype;
+
+			/** Management Access Record data.
+			 *
+			 * Most data in this type of record are just plain text strings.
+			 * The "System GUID" (UUID) subtype data is binary, but as usual for
+			 * libfru, a hex string representation is expected/stored here.
+			 *
+			 * \note The "System GUID" (\ref FRU_MR_MGMT_SYS_UUID) data string
+			 *       is expected to be Big-Endian on input, and will be stored
+			 *       here in the same format on output. The generated binary
+			 *       file output will use SMBIOS-compatible Little-Endian
+			 *       encoding for the first three fields, and the same
+			 *       encoding is expected from an input binary FRU file.
+			 */
+			char data[FRU_MR_MGMT_MAXDATA + 1]; /* 1 byte for terminator */
+		} mgmt;
+		/** Base Compatibility Record, see IPMI FRU spec section 18.5 */
+		/** TODO: Not yet implemented */
+		struct {
+		} bcr;
+		/** Extended Compatibility Record, see IPMI FRU spec section 18.6 */
+		/** TODO: Not yet implemented */
+		struct {
+		} ecr;
+		/** Alert Standard Format records, see ASF spec (DSP0136), revision 2.0 */
+		/** TODO: Not yet implemented */
+		struct {
+			union {
+				/** Fixed SMBus Addresses, see section 4.3.1 */
+				/** TODO: Not yet implemented */
+				struct {
+				} smbus;
+				/** Legacy-Device Alerts, see section 4.3.2 */
+				/** TODO: Not yet implemented */
+				struct {
+				} legacy;
+				/** Remote Control, see section 4.3.3 */
+				/** TODO: Not yet implemented */
+				struct {
+				} rc;
+			};
+		} asf;
+
+		/** NVMe Records, see NVMe-MI specification revision 1.2b */
+		/** TODO: Not yet implemented */
+		struct {
+			union {
+				/** NVMe Record, see section 8.2.3 */
+				/** TODO: Not yet implemented */
+				struct {
+					fru_nvme_ff_t formfactor; /**< Form-Factor as per NVMe-MI 1.2b Figure 160 */
+					uint8_t p1v8_init;
+					uint8_t p1v8_max;
+					uint8_t p3v3_init;
+					uint8_t p3v3_max;
+					uint8_t p3v3_aux_max;
+					uint8_t p5v_init;
+					uint8_t p5v_max;
+					uint8_t p12v_init;
+					uint8_t p12v_max;
+					uint8_t ptherm_max;
+					uint64_t capacity_lo; /**< Total capacity, higher 8 bytes, 13:6 of 13, host-endian */
+					uint32_t capacity_mid; /**< Total capacity, middle 4 bytes, 5:2 of 13, host-endian */
+					uint8_t capacity_hi; /**< Total capacity, middle 4 bytes, 1 of 13 */
+				} info;
+				/** NVMe PCIe Port Record, see section 8.2.4 */
+				/** TODO: Not yet implemented */
+				struct {
+				} pcie;
+				/** NVMe Topology Record, see section 8.2.4 */
+				/** TODO: Not yet implemented */
+				struct {
+				} topology;
+			};
+		} nvme;
+
+		/** OEM Record, see IPMI FRU spec section 18.7 */
+		/** TODO: Not yet implemented */
+		struct {
+			uint32_t mfg_id; /**< Manufacturer ID, 24 bits */
+			
+			fru_field_enc_t enc; /**< OEM data encoding
+			                      *
+			                      * Supported are:
+			                      *   - \ref FRU_FE_TEXT (plain text, Latin1 only, auto \a len)
+			                      *   - \ref FRU_FE_BINARY (hex string data)
+			                      *
+			                      * Functions fru_load_file() and fru_load_buffer() always autodetect
+			                      * the encoding of OEM records, and set the \a type field accordingly.
+			                      */
+			char data[FRU_MRR_OEM_MAXDATA]; /**< OEM data */
+		} oem;
+
+		/** Custom Raw Record. Use for unsupported types.
+		 *
+		 * This entry is for adding any raw data, even if
+		 * a specific type is not supported by libfru yet.
+		 */
+		/** TODO: Not yet implemented */
+		struct {
+			uint8_t type; /**< The actual record Type */
+			fru_field_enc_t enc; /**< OEM data encoding
+									*
+									* Supported are:
+									*   - \ref FRU_FE_TEXT (plain text, Latin1 only, auto \a len)
+									*   - \ref FRU_FE_BINARY (hex string data)
+									*
+									* Functions fru_load_file() and fru_load_buffer() always
+									* load the otherwise unsupported records as `raw` and always
+									* autodetect the encoding of such records, seting \a enc field
+									* accordingly.
+									*/
+			char data[FRU_MRR_RAW_MAXDATA]; /**< Raw data */
+		} raw;
+	};
+} fru_mr_rec_t;
+
+/**
+ * @brief Add a multirecord area record
+ *
+ * Allocates a new multirecord area record structure, adds it to the
+ * given FRU info structure, and fills it with provided data.
+ * You may discard/free the source \a rec after a successfull call
+ * to this function.
+ *
+ * Automatically sets `fru->presence[FRU_MR] = true`
+ *
+ * @param[in, out] fru The decoded FRU information structure to modify.
+ * @param[in] index Index in the MR record list at which to add the new
+ *                  record. Specify \ref FRU_LIST_TAIL to add the new
+ *                  record at the end of the list, or \ref FRU_LIST_HEAD
+ *                  to insert it at the head.
+ * @param[in] rec The decoded MultiRecord area record structure to add.
+ *                If \p NULL, an empty record of \ref FRU_MR_EMPTY type
+ *                is added.
+ *
+ * @returns A pointer to the allocated record inside the MR area
+ * @retval NULL Failure, sets \ref fru_errno
+ *
+ * @ingroup multirec
+ */
+fru_mr_rec_t * fru_add_mr(fru_t * fru, size_t index, fru_mr_rec_t * rec);
+
+/**
+ * @brief Get a multirecord area record at the given index
+ *
+ * Finds the record at the given index in the MultiRecord area
+ * and returns a pointer to it or \a NULL if not found.
+ *
+ * \b Hint
+ *
+ * You may use index FRU_LIST_HEAD to check if the MR area is empty:
+ * ```.c
+ * if (!fru_get_mr(fru, FRU_LIST_HEAD)) {
+ *     // MR area is empty!
+ * }
+ * ```
+ *
+ * @param[in] fru The decoded FRU information structure to search.
+ * @param[in] index Index of the record to fetch from the the MR record list
+ *                  Specify \ref FRU_LIST_HEAD to get the first record
+ *                  or to check whether the list is empty.
+ * @param[in] index Index of the MultiRecord area record to fetch
+ *
+ * @returns A pointer to the found record inside the MR area
+ * @retval NULL Failure, sets \ref fru_errno
+ *
+ * @ingroup multirec
+ */
+fru_mr_rec_t * fru_get_mr(const fru_t * fru, size_t index);
+
+/**
+ * @brief Find a multirecord area record of the given type or at the given index
+ *
+ * Finds the record in the MultiRecord area using the record
+ * \p type and the starting \p index. Updates \p index when the
+ * record is found, sets it to the index of the found record.
+ * If the found record was the last in the list, then sets
+ * \ref fru_errno to \ref FEMREND (but succeeds)
+ *
+ * If \p type is FRU_MR_ANY, then \p index must point to a non-negative
+ * value indicating the index of the record to fetch. In this case
+ * the value pointed to by \p index doesn't change.
+ *
+ * @param[in] fru The decoded FRU information structure to search.
+ * @param[in] type Type of the record to search for.
+ * @param[in, out] index Starting index of the MultiRecord area record
+ *                       to begin the search with. Upon success, the
+ *                       index of the found record. You may specify
+ *                       \ref FRU_LIST_HEAD to start searching from
+ *                       the very start of the list.
+ *
+ * @returns A pointer to the found record inside the MR area
+ * @retval NULL Failure, sets \ref fru_errno, doesn't update \p index
+ *
+ * @ingroup multirec
+ */
+fru_mr_rec_t * fru_find_mr(const fru_t * fru, fru_mr_type_t type, size_t * index);
+
+/**
+ * @brief Replace a multirecord area record at the given index
+ *
+ * Finds the record at the given index in the MultiRecord area,
+ * and replaces its contents with those from the provided structure.
+ * The original \p rec can be safely discarded after the call.
+ *
+ * @param[in, out] fru The decoded FRU information structure to modify.
+ * @param[in] index Index of the record to replace.
+ * @param[in] rec The decoded MultiRecord area record structure to use
+ *                instead of the found one
+ *
+ * @returns Success status
+ * @retval true Success
+ * @retval false Failure, sets \ref fru_errno
+ *
+ * @ingroup multirec
+ */
+bool fru_replace_mr(fru_t * fru, size_t index, fru_mr_rec_t * rec);
+
+/**
+ * @brief Delete a multirecord area record at the given index
+ *
+ * Finds the record at the given index in the MultiRecord area,
+ * and deletes it. Automatically marks the MR area in \a fru as
+ * not present upon deletion of the last entry.
+ *
+ * @param[in,out] fru The decoded FRU information structure to modify.
+ * @param[in] index Index of the record to replace
+ *
+ * @returns Success status
+ * @retval true Success
+ * @retval false Failure, sets \ref fru_errno
+ *
+ * @ingroup multirec
+ */
+bool fru_delete_mr(fru_t * fru, size_t index);
+
+/** @} multirec */
+
+/**
+ * @addtogroup internal
+ * @{
+ */
+
+/**
+ * @brief Set internal use area from binary buffer
+ *
+ * Converts contents of the provided binary buffer into
+ * a hex string and copies them into \a fru->internal, allocating
+ * or reallocating the latter as needed. On success enables the
+ * FRU_INTERNAL_USE area. On failure, leaves it and \a fru->internal
+ * as they were.
+ *
+ * @param[in] fru The decoded FRU information structure to modify.
+ * @param[in] buffer Source binary buffer
+ * @param[in] size Number of bytes in \a buffer
+ *
+ * @returns Success status
+ * @retval true Success
+ * @retval false Failure, \a fru unmodified, check \ref fru_errno
+ *
+ * @ingroup internal
+ */
+bool fru_set_internal_binary(fru_t * fru, const void * buffer, size_t size);
+
+/**
+ * @brief Set internal use area from a hex string
+ *
+ * Copies contents of the provided hex string into
+ * internal use area of the the given FRU info structure.
+ * Allocates a new buffer for that, the original \a buffer may
+ * safely be deallocated after the call.
+ *
+ * On success will allocate or reallocate internal use area
+ * in \a fru as needed and will enable FRU_INTERNAL_USE area.
+ * The area is put at the default position.
+ *
+ * On failure will leave \a fru completely unmodified.
+ 
+ * The source string must contain only hex digits and optional delimiters
+ * that will be skipped during copying. Supported delimiters are:
+ *
+ *  - space ' '
+ *  - dot '.'
+ *  - dash '-'
+ *  - colon ':'
+ *
+ * Any other symbols will result in a failure.
+ * 
+ * @b Example
+ * ```.c
+ * fru_set_internal_hexstring(fru, "1337C0DE");
+ * ```
+ *
+ * @param[in] fru The decoded FRU information structure to modify.
+ * @param[in] hexstr The source hex string
+ *
+ * @returns Success status
+ * @retval true Success
+ * @retval false Failure, \a fru left unmodified, check \ref fru_errno
+ *
+ * @ingroup internal
+ */
+bool fru_set_internal_hexstring(fru_t * fru, const void * hexstr);
+
+/**
+ * @brief Delete internal use area from FRU structure
+ *
+ * Deallocates the internal use area and removes it from the
+ * given FRU info structure.
+ *
+ * @param[in] fru The decoded FRU information structure to modify.
+ *
+ * @returns Success status
+ * @retval true Success
+ * @retval false Failure, sets \ref fru_errno
+ *
+ * @ingroup internal
+ */
+bool fru_delete_internal(fru_t * fru);
+
+/** @} internal */
+

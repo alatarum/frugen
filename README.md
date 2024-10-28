@@ -22,7 +22,34 @@ full compliance with [IPMI FRU Information Storage Definition v1.0, rev. 1.3.](h
 
 ## libfru
 
-So far supported in libfru:
+This is the library behind frugen. It is aimed at providing a very easy-to-use
+API that completely (well, almost) abstracts the user from the details of the
+binary FRU file internals. All data that the user has to deal with is either
+plain text or hex strings (in rare occasions raw binary data buffers may also
+be supported).
+
+Most memory management in the library is automatic and the users doen't have to
+care about freeing any internal allocation as long as they use the library API
+properly. The central entity of the library is \ref fru_t, the structure type
+that represents a fully decoded FRU information as a whole. You will find
+fields for every FRU area inside that structure, and there is a lot of
+functions to work with that structure. You may load it from a file or from
+an in-memory buffer, and you may save it back. In the meantime you're free
+to modify the data in the structure as you want.
+
+Any errors detected by the API calls they will report via a familiar POSIX-like
+mechanism of a global thread-specific \ref fru_errno variable.
+
+Please read the doxygen-formatted documentation thoroughly before first use.
+You may also check frugen code for library usage examples.
+
+So far supported in libfru are:
+
+  * Data decoding from all the encoding formats defined by the FRU specification.
+    Exception:
+
+    * Unicode is not supported
+    * Language codes aren't actually supported, all text is decoded as if it was English (ASCII+Latin1)
 
   * Data encoding into all the defined formats (binary, BCD plus, 6-bit ASCII, language code specific text).
     The exceptions are:
@@ -31,14 +58,27 @@ So far supported in libfru:
     * encoding is selected either automatically based on value range of the supplied data, or by
       specifying it explicitly
 
-  * Data decoding from all the formats defined by the specification.
-    Exception: Unicode is not supported
+  * Internal use area loading as a hex string
+  * Internal use area creation from:
 
-  * Internal use area creation from and decoding to a hex string,
-    only with automatic sizing
-  * Chassis information area creation and decoding
-  * Board information area creation and decoding
-  * Product information area creation and decoding
+    * A hex string (auto sizing, just to accomodate the provided data)
+    * A binary buffer (arbitrary size limited by FRU specification only)
+
+  * All informatio areas creation and decoding (Chassis, Board, Product):
+
+    * All the mandatory fields:
+
+      * Area-specific non-string fields:
+
+        * Chassis Type
+        * Board Language Code
+        * Board Mfg. Date/Time, etc.)
+        * Product Language Code
+
+      * All the string-like fields
+
+    * Any custom fields
+
   * Multirecord area creation and decoding with the following record types:
 
     * Management Access Record with the following subtypes:
@@ -51,16 +91,16 @@ So far supported in libfru:
       * Component management URL (curl)
       * Component ping address (cpingaddr)
 
-  * FRU area finding (in a memory buffer)
+    * Any other MR record types decoding and encoding as 'raw' type:
+      data is a hex string for decoding, or a hex string or a binary
+      buffer for encoding.
+
   * FRU file creation (in a memory buffer)
 
 _NOT supported:_
 
-  * Miltirecord area record types/subtypes other than listed above.
-    NOTE: The unsupported MR record types/subtypes can not be decoded
-          or encoded, but they are still found as raw records and
-          can be used to build a FRU file if both input and output
-          formats are binary rather than json.
+  * Miltirecord area record encoding/decoding for types/subtypes other
+    than the listed above.
 
 ## frugen
 

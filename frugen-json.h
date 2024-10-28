@@ -1,10 +1,11 @@
 /** @file
  *  @brief FRU generator utility JSON support code
  *
- *  Copyright (C) 2016-2023 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *  @copyright
+ *  Copyright (C) 2016-2024 Alexander Amelkin <alexander@amelkin.msk.ru>
+ *
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
-#include "fru.h"
 #include "frugen.h"
 
 /**

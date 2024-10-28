@@ -46,7 +46,17 @@ if(MSVC)
 	add_compile_options(/W4)
 else(MSVC)
 	# additional warnings
-	add_compile_options(-Wall -Werror -Wfatal-errors -Wextra -Wunreachable-code)
+	add_compile_options(
+		-Wall
+		-Werror
+		-Wfatal-errors
+		-Wextra
+		-Wunreachable-code
+		-Wunused-macros
+		-Wunused-local-typedefs
+		-ffunction-sections
+		-fdata-sections
+	)
 endif(MSVC)
 
 if(DEBUG_OUTPUT)
@@ -66,12 +76,34 @@ add_documentation(docs Doxyfile)
 
 # build libfru
 set(libfru_SOURCES
-	fru.c
-	fru-errno.c
+	lib/fru__decode.c
+	lib/fru_binhex.c
+	lib/fru_enable_area.c
+	lib/fru_errno.c
+	lib/fru_add_custom.c
+	lib/fru_add_mr.c
+	lib/fru_common.c
+	lib/fru_delete_custom.c
+	lib/fru_get_custom.c
+	lib/fru_init.c
+	lib/fru_internal.c
+	lib/fru_load.c
+	lib/fru_mr_ops.c
+	lib/fru_save.c
+	lib/fru_setfield.c
+	lib/fru_getfield.c
 )
 set(libfru_HEADERS
 	${CMAKE_CURRENT_BINARY_DIR}/fru.h
+	fru_errno.h
+	lib/fru-private.h
 )
+
+set(libfru_PUBLIC_HEADERS
+	${CMAKE_CURRENT_BINARY_DIR}/fru.h
+	fru_errno.h
+)
+
 if(BUILD_SHARED_LIB)
 	add_library(fru-shared SHARED ${libfru_SOURCES} ${libfru_HEADERS})
 	add_library(frugen::fru-shared ALIAS fru-shared)
@@ -81,7 +113,7 @@ if(BUILD_SHARED_LIB)
 	)
 	set_target_properties(fru-shared PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
 	set_target_properties(fru-shared PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
-	set_target_properties(fru-shared PROPERTIES PUBLIC_HEADER "${libfru_HEADERS}")
+	set_target_properties(fru-shared PROPERTIES PUBLIC_HEADER "${libfru_PUBLIC_HEADERS}")
 	list(APPEND LIB_TARGETS "fru-shared")
 endif(BUILD_SHARED_LIB)
 if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
@@ -92,7 +124,7 @@ if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 		$<INSTALL_INTERFACE:include>
 	)
 	set_target_properties(fru-static PROPERTIES OUTPUT_NAME fru CLEAN_DIRECT_OUTPUT 1)
-	set_target_properties(fru-static PROPERTIES PUBLIC_HEADER "${libfru_HEADERS}")
+	set_target_properties(fru-static PROPERTIES PUBLIC_HEADER "${CMAKE_CURRENT_BINARY_DIR}/fru.h")
 	list(APPEND LIB_TARGETS "fru-static")
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
@@ -104,6 +136,12 @@ if(ENABLE_JSON)
 endif(ENABLE_JSON)
 add_executable(frugen ${frugen_SOURCES})
 list(APPEND ALL_TARGETS ${LIB_TARGETS} "frugen")
+
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+	set_target_properties(frugen PROPERTIES LINK_FLAGS "-Wl,--gc-sections,--print-gc-sections")
+else()
+	set_target_properties(frugen PROPERTIES LINK_FLAGS "-Wl,--gc-sections")
+endif()
 
 if(BINARY_STATIC)
 	target_link_libraries(frugen -static)
