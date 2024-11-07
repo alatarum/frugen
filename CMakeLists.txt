@@ -1,7 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
-if(COMMAND cmake_policy)
-	cmake_policy(SET CMP0003 NEW)
-endif(COMMAND cmake_policy)
+cmake_minimum_required(VERSION 3.5)
 
 # To make frugen 32-bit, set BINARY_32BIT or use an external toolchain file
 option(BINARY_32BIT "compile 32bit version" OFF)
@@ -118,14 +115,17 @@ else(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
 if(ENABLE_JSON)
-	find_package(json-c CONFIG REQUIRED)
-	message (STATUS "Using JSON Library found at " ${json-c_DIR})
+	find_package(PkgConfig)
+	pkg_check_modules(json-c REQUIRED json-c)
+
 	add_definitions(-D__HAS_JSON__)
 	if(JSON_STATIC OR BINARY_STATIC)
-		target_link_libraries(frugen json-c::json-c-static)
-	else(JSON_STATIC OR BINARY_STATIC)
-		target_link_libraries(frugen json-c::json-c)
-	endif(JSON_STATIC OR BINARY_STATIC)
+		target_link_libraries(frugen ${json-c_STATIC_LIBRARIES})
+	else()
+		target_link_libraries(frugen ${json-c_LIBRARIES})
+	endif()
+
+	target_include_directories(frugen PRIVATE ${json-c_INCLUDE_DIRS})
 else(ENABLE_JSON)
 	message (WARNING "JSON library support *disabled*!")
 endif(ENABLE_JSON)
