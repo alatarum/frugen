@@ -1,0 +1,79 @@
+when:
+  branch: [master]
+  event: [push, pull_request]
+
+matrix:
+  Ubuntu:
+    - noble
+    - jammy
+    - xenial
+
+variables:
+  - &buildenv 'alexanderamelkin/frugen-buildenv:${Ubuntu}'
+
+clone:
+  - name: git
+    image: woodpeckerci/plugin-git
+    settings:
+      tags: true
+
+steps:
+  build-all:
+    image: *buildenv
+    # Pull the image on the first step only
+    pull: true
+    commands: >
+      # Run the build.
+
+      mkdir build
+
+      cd build
+
+      cmake ..
+
+      make
+
+  build-static:
+    image: *buildenv
+    commands: >
+      # Run the build.
+
+      rm -rf build
+
+      mkdir build
+
+      cd build
+
+      cmake -DBINARY_STATIC=true -DBUILD_SHARED_LIB=false ..
+
+      make
+
+  build-semistatic:
+    image: *buildenv
+    commands: >
+      # Run the build.
+
+      rm -rf build
+
+      mkdir build
+
+      cd build
+
+      cmake -DJSON_STATIC=true -DBUILD_SHARED_LIB=false ..
+
+      make
+
+  docs:
+    image: *buildenv
+    commands: >
+      # Run the build.
+
+      rm -rf build
+
+      mkdir build
+
+      cd build
+
+      cmake ..
+
+      make docs
