@@ -334,7 +334,7 @@ typedef fru_mr_rec_t fru_mr_area_t; /// Intended for use as a pointer only
 #define FRU_FIELD_TERMINATOR  FRU_TYPELEN(TEXT, 1)
 
 #define FRU_BLOCK_SZ 8
-#define FRU_BYTES(blocks) ((blocks) * FRU_BLOCK_SZ)
+#define FRU_BYTES(blocks) ((size_t)((blocks) * FRU_BLOCK_SZ))
 #define FRU_BLOCKS(bytes)  (((bytes) + FRU_BLOCK_SZ - 1) / FRU_BLOCK_SZ)
 
 typedef enum {

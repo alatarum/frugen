@@ -1885,7 +1885,7 @@ fru_internal_use_area_t *find_fru_internal_use_area(
 	uint8_t *buffer, size_t *iu_size, size_t size,
 	fru_flags_t flags)
 {
-	off_t next_nearest_area = 0;
+	size_t next_nearest_area = 0;
 	fru_t *header;
 
 	if (!iu_size) {
