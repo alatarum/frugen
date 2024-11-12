@@ -315,8 +315,27 @@ void load_from_binary_file(const char *fname,
 	}
 
 	debug(2, "Reading the template file of size %lu...", statbuf.st_size);
-	if (read(fd, buffer, statbuf.st_size) != statbuf.st_size) {
-		fatal("Cannot read file");
+	off_t total_read = 0;
+	off_t bytes_read;
+	do
+	{
+		bytes_read = read(fd, buffer + total_read, statbuf.st_size - total_read);
+		if (bytes_read < 0) {
+			fatal("Error (%d) reading template file: %s", errno, strerror(errno));
+		}
+		else {
+			debug(3, "Read %jd bytes from file (%jd/%zd)",
+			      (intmax_t)bytes_read,
+			      (intmax_t)total_read,
+			      statbuf.st_size);
+		}
+		total_read += bytes_read;
+	} while(total_read < statbuf.st_size && bytes_read);
+
+	if(total_read < statbuf.st_size) {
+		warn("File was shorter than expected (%jd / %jd)",
+		     (intmax_t)total_read,
+		     statbuf.st_size);
 	}
 	close(fd);
 
