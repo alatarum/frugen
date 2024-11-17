@@ -26,7 +26,20 @@
 #include "fru-errno.h"
 
 #define _BSD_SOURCE
-#include <endian.h>
+
+#if defined(__APPLE__)
+#include <libkern/OSByteOrder.h>
+
+#define htobe16(x) OSSwapHostToBigInt16(x)
+#define htole16(x) OSSwapHostToLittleInt16(x)
+#define be16toh(x) OSSwapBigToHostInt16(x)
+#define le16toh(x) OSSwapLittleToHostInt16(x)
+
+#define htobe32(x) OSSwapHostToBigInt32(x)
+#define htole32(x) OSSwapHostToLittleInt32(x)
+#define be32toh(x) OSSwapBigToHostInt32(x)
+#define le32toh(x) OSSwapLittleToHostInt32(x)
+#endif
 
 #ifdef __STANDALONE__
 #include <stdio.h>
@@ -1354,7 +1367,7 @@ typedef union __attribute__((packed)) {
 		uint8_t clock_seq_low;
 		uint8_t node[6];
 	};
-} uuid_t;
+} fru_uuid_t;
 #pragma pack(pop)
 
 static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
@@ -1476,7 +1489,7 @@ int fru_mr_mgmt_str2rec(fru_mr_rec_t **rec,
 int fru_mr_uuid2rec(fru_mr_rec_t **rec, const char *str)
 {
 	size_t len;
-	uuid_t uuid;
+	fru_uuid_t uuid;
 
 	if (!str) return -EFAULT;
 
@@ -1531,7 +1544,7 @@ int fru_mr_uuid2rec(fru_mr_rec_t **rec, const char *str)
 int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *mgmt, fru_flags_t flags)
 {
 	size_t i;
-	uuid_t uuid;
+	fru_uuid_t uuid;
 
 	if (!mgmt || !str) {
 		return -EFAULT;
