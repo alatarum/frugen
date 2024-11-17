@@ -39,14 +39,14 @@ option(ENABLE_JSON "enable JSON support" ON)
 option(JSON_STATIC "link json-c library statically" OFF)
 option(DEBUG_OUTPUT "show extra debug output" OFF)
 
-set(CMAKE_C_FLAGS_RELEASE "-Os -Wall -Werror -Wfatal-errors")
-set(CMAKE_C_FLAGS_DEBUG "-g3 -O0 -Wall -Werror -Wfatal-errors")
+set(CMAKE_C_FLAGS_RELEASE "-Os")
+set(CMAKE_C_FLAGS_DEBUG "-g3 -O0")
 if(MSVC)
 	# warning level 4
 	add_compile_options(/W4)
 else(MSVC)
 	# additional warnings
-	add_compile_options(-Wall -Wextra -Wunreachable-code)
+	add_compile_options(-Wall -Werror -Wfatal-errors -Wextra -Wunreachable-code)
 endif(MSVC)
 
 if(DEBUG_OUTPUT)
