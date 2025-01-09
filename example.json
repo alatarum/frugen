@@ -59,28 +59,6 @@
 		{ "type" : "management", "subtype" : "spingaddr", "spingaddr" : "172.17.33.11" },
 		{ "type" : "management", "subtype" : "curl", "curl" : "http://component.coolsystem.company.domain" },
 		{ "type" : "management", "subtype" : "cname", "cname" : "Some important component" },
-		{ "type" : "management", "subtype" : "cpingaddr", "cpingaddr" : "172.17.33.12" },
-		{ "type" : "psu",
-		  "capacity" : 2000,
-		  "peak_VA": 2500,
-		  "inrush_current" : 15,
-		  "inrush_interval_ms": 50,
-		  "vin_range1": [170, 250],
-		  "vin_range2": [80, 130],
-		  "freq_range": [45, 65],
-		  "dropout_tolerance_ms": 5,
-		  "hot_swap": true,
-		  "autoswitch": true,
-		  "pfc": true,
-		  "tacho_2ppr": false,       /* Only one of these two    */
-		  "prefail_active_lo": true, /* options may be specified */
-		  "prefail_support": true,
-		  "prefail_tach_lo_rps": 500,
-		  "peak_W_holdup_s": 15,
-		  "peak_W_capacity": 2500,
-		  "combined_W_V1": 100,
-		  "combined_W_V2": 100,
-		  "combined_W_total": 200
-		}
+		{ "type" : "management", "subtype" : "cpingaddr", "cpingaddr" : "172.17.33.12" }
 	]
 }
