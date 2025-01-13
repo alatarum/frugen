@@ -173,6 +173,7 @@ typedef enum {
 
 /// Table 16-2, MultiRecord Area Record Types
 typedef enum {
+	FRU_MR_INVALID = -1,
 	FRU_MR_MIN = 0x00,
 	FRU_MR_PSU_INFO = 0x00,
 	FRU_MR_DC_OUT = 0x01,
@@ -516,6 +517,24 @@ fru_board_area_t * fru_board_info(const fru_exploded_board_t *board);
 fru_product_area_t * fru_product_info(const fru_exploded_product_t *product);
 
 /**
+ * Take an input hex string and pack it into an "exploded" multirecord
+ * area record in binary form, using the provided type.
+ *
+ * As per IPMI FRU specifiation section 18.4, no validity checks
+ * are performed to restrict the values. Only the length is checked
+ * to fit into the record's length field.
+ *
+ * @returns An errno-like negative error code
+ * @retval 0        Success
+ * @retval -EINVAL  Invalid string (wrong length, wrong symbols)
+ * @retval -EFAULT  Invalid pointer
+ * @retval >0       any errno that calloc() is allowed to set
+ */
+int fru_mr_hexstr2rec(fru_mr_rec_t **rec,
+                      const char *str,
+                      fru_mr_type_t type);
+
+/**
  * Take an input string and pack it into an "exploded" multirecord
  * area "management access" record in binary form, using the
  * provided subtype.
@@ -581,6 +600,24 @@ int fru_mr_rec2uuid(char **str, fru_mr_mgmt_rec_t *rec, fru_flags_t flags);
  */
 int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
                         fru_flags_t flags);
+
+/**
+ * Take an "exploded" multirecord area record in binary form and convert
+ * it into a canonical C string containing a hex text representation of
+ * the record's data.
+ *
+ * @param[in,out] str  Pointer to a string to be allocated and filled in with
+ *                     the hexstring value of the record's data
+ * @param[in]     rec  Pointer to the input MR area record
+ * @returns An errno-like negative error code
+ * @retval 0        Success
+ * @retval -EINVAL  Not a valid Management Access record or a UUID record
+ * @retval -EFAULT  Invalid pointer
+ * @rerval -ERANGE  Checksum error on record header or data
+ * @retval >0       any errno that calloc() is allowed to set
+ */
+int fru_mr_rec2hexstr(char **str, fru_mr_rec_t *rec,
+                      fru_flags_t flags);
 
 /**
  * Allocate and build an Internal Use Area block.

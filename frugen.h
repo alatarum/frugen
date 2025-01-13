@@ -140,7 +140,8 @@ fru_mr_mgmt_type_t fru_mr_mgmt_type_by_name(const char *name);
 /**
  * Get Multirecord Area Record name by its type
  *
- * Reverse of fru_mr_mgmt_type_by_name()
+ * Reverse of fru_mr_mgmt_type_by_name().
+ * Returns an _allocated_ copy of the name string, don't forget to free it.
  */
-const char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type);
+char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type);
 

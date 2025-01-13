@@ -277,6 +277,31 @@ bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
 			debug(1, "Found a PSU info record (not yet supported, skipped)");
 			continue;
 		}
+		else if (!strcmp(type, "custom")) {
+			debug(1, "Found a custom MR record");
+			int32_t custom_type = FRU_MR_INVALID;
+			json_object_object_get_ex(item, "custom_type", &ifield);
+			if (!ifield
+			    || FRU_MR_MIN > (custom_type = json_object_get_int(ifield))
+			    || FRU_MR_MAX < custom_type)
+			{
+				fatal("Each custom MR record must have a custom_type (0...255)");
+			}
+			const char *hexstr = NULL;
+			json_object_object_get_ex(item, "data", &ifield);
+			if (!ifield) {
+				fatal("data field is missing for a custom MR record");
+			}
+			hexstr = json_object_get_string(ifield);
+
+			fru_errno = fru_mr_hexstr2rec(&mr_reclist_tail->rec, hexstr, custom_type);
+			if (fru_errno)
+				fatal("Failed to convert custom MR data: %s", fru_strerr(fru_errno));
+			debug(2, "Custom MR data loaded from JSON: %s", hexstr);
+			has_multirec = true;
+
+			continue;
+		}
 		else {
 			fatal("Multirecord type '%s' is not supported", type);
 			continue;
@@ -317,27 +342,29 @@ bool json_from_mr_reclist(json_object **jso,
 
 	while (item) {
 		fru_mr_rec_t *rec = item->rec;
-		// Pointers to static strings, depending on the found record
-		const char *type = NULL;
-		const char *subtype = NULL;
-		const char *key = NULL;
-		// Pointer to an allocated string to be freed at the end of iteration
-		char *val = NULL;
-
+		size_t key_count = 0;
+		bool mr_valid = false;
+		// Pointers to allocated strings, depending on the found record
+#define MAX_MR_KEYS 5 // Index 0 is always 'type', the rest depends on the type
+		union { char *str; int num; } values[MAX_MR_KEYS] = {};
+		char *keys[MAX_MR_KEYS] = {};
+		enum { MR_TYPE_STR, MR_TYPE_INT } types[MAX_MR_KEYS] = {};
 		switch (rec->hdr.type_id) {
 			case FRU_MR_MGMT_ACCESS: {
+				bool mgmt_valid = true;
 				fru_mr_mgmt_rec_t *mgmt = (fru_mr_mgmt_rec_t *)rec;
 				int rc;
-				type = "management";
+				/* We need to allocate keys entries */
+				sscanf("management", "%ms", &values[0].str); // keys[0] allocated later
+				sscanf("subtype", "%ms", &keys[1]); // values[1] allocated later
 #define MGMT_TYPE_ID(type) ((type) - FRU_MR_MGMT_MIN)
 				switch (mgmt->subtype) {
 				case FRU_MR_MGMT_SYS_UUID:
-					if ((rc = fru_mr_rec2uuid(&val, mgmt, flags))) {
+					if ((rc = fru_mr_rec2uuid(&values[2].str, mgmt, flags))) {
 						printf("Could not decode the UUID record: %s\n",
 						       strerror(-rc));
 						break;
 					}
-					key = subtype = fru_mr_mgmt_name_by_type(mgmt->subtype);
 					break;
 				case FRU_MR_MGMT_SYS_URL:
 				case FRU_MR_MGMT_SYS_NAME:
@@ -345,67 +372,94 @@ bool json_from_mr_reclist(json_object **jso,
 				case FRU_MR_MGMT_COMPONENT_URL:
 				case FRU_MR_MGMT_COMPONENT_NAME:
 				case FRU_MR_MGMT_COMPONENT_PING:
-					if ((rc = fru_mr_mgmt_rec2str(&val, mgmt, flags))) {
+					if ((rc = fru_mr_mgmt_rec2str(&values[2].str, mgmt, flags))) {
+						char *subtype = fru_mr_mgmt_name_by_type(mgmt->subtype);
 						printf("Could not decode the Mgmt Access record '%s': %s\n",
-						       fru_mr_mgmt_name_by_type(mgmt->subtype),
+						       subtype,
 						       strerror(-rc));
+						free(subtype);
 						break;
 					}
-					type = "management";
-					key = subtype = fru_mr_mgmt_name_by_type(mgmt->subtype);
 					break;
 				default:
 					debug(1, "Multirecord Management subtype 0x%02X is not yet supported",
 					      mgmt->subtype);
+					mgmt_valid = false;
+				}
+
+				if (mgmt_valid) {
+					/* Two calls to make it allocated twice for uniform deallocation later */
+					values[1].str = fru_mr_mgmt_name_by_type(mgmt->subtype);
+					keys[2] = fru_mr_mgmt_name_by_type(mgmt->subtype);
+					key_count = 3;
+					mr_valid = true;
 				}
 				break;
 			}
 			case FRU_MR_PSU_INFO:
 				debug(1, "Found a PSU info record (not yet supported, skipped)");
 				break;
-			default:
-				debug(1, "Multirecord type 0x%02X is not yet supported", rec->hdr.type_id);
+			default: {
+				debug(1, "Multirecord type 0x%02X is not yet supported, decoding as 'custom'",
+				      rec->hdr.type_id);
+				int rc;
+				sscanf("custom", "%ms", &values[0].str); // keys[0] allocated later
+				sscanf("custom_type", "%ms", &keys[1]); // values[1] allocated later
+				types[1] = MR_TYPE_INT;
+				values[1].num = rec->hdr.type_id;
+
+				sscanf("data", "%ms", &keys[2]); // values[1] allocated later
+				rc = fru_mr_rec2hexstr(&values[2].str, rec, flags);
+				if (rc) {
+					fatal("Could not decode as a custom record: %s\n", strerror(-rc));
+					break;
+				}
+				mr_valid = true;
+				key_count = 3;
+				debug(1, "Custom MR record decoded: %s", values[2].str);
+				break;
+			}
+
 		}
 
-		if (type && subtype && key && val) {
-			struct json_object *val_string, *type_string, *subtype_string, *entry;
-			val_string = json_object_new_string((const char *)val);
-			if (val) { // We don't need it anymore, it's in val_string already
-				free(val);
-				val = NULL;
-			}
-			if (NULL == val_string) {
-				printf("Failed to allocate a JSON string for MR record value");
-				goto out;
-			}
-			if ((type_string = json_object_new_string((const char *)type)) == NULL) {
-				printf("Failed to allocate a JSON string for MR record type");
-				json_object_put(val_string);
-				goto out;
-			}
-			if ((subtype_string = json_object_new_string((const char *)subtype)) == NULL) {
-				printf("Failed to allocate a JSON string for MR record subtype");
-				json_object_put(type_string);
-				json_object_put(val_string);
-				goto out;
-			}
-			if ((entry = json_object_new_object()) == NULL) {
-				printf("Failed to allocate a new JSON entry for MR record");
-				json_object_put(subtype_string);
-				json_object_put(type_string);
-				json_object_put(val_string);
-				goto out;
-			}
-			json_object_object_add(entry, "type", type_string);
-			json_object_object_add(entry, "subtype", subtype_string);
-			json_object_object_add(entry, key, val_string);
-			json_object_array_add(mr_jso, entry);
-		}
+		if (mr_valid && key_count) {
+			struct json_object *entry;
+			size_t j = 0;
 
+			if ((entry = json_object_new_object()) == NULL)
+				fatal("Failed to allocate a new JSON entry for MR record");
+
+			sscanf("type", "%ms", &keys[0]); // This is common for all valid MR records
+			for (; j < key_count; j++) {
+				struct json_object *vobj;
+
+				if (!keys[j] || (MR_TYPE_STR == types[j] && !values[j].str))
+					fatal("Internal error. Required key or value not found. Please report.");
+
+				switch (types[j]) {
+					case MR_TYPE_STR:
+						vobj = json_object_new_string((const char *)values[j].str);
+						free(values[j].str);
+						values[j].str = NULL;
+						break;
+					case MR_TYPE_INT:
+						vobj = json_object_new_int((int32_t)values[j].num);
+						values[j].num = 0;
+						break;
+					default:
+				}
+				if (!vobj)
+					fatal("Failed to allocate a JSON object for value of '%s'", keys[j]);
+
+				json_object_object_add(entry, keys[j], vobj);
+				free(keys[j]);
+				keys[j] = NULL;
+			}
+			if (j && j == key_count) {
+				json_object_array_add(mr_jso, entry);
+			}
+		}
 		item = item->next;
-		if (val) {
-			free(val);
-		}
 	}
 
 	rc = true;

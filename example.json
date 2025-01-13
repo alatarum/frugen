@@ -59,6 +59,11 @@
 		{ "type" : "management", "subtype" : "spingaddr", "spingaddr" : "172.17.33.11" },
 		{ "type" : "management", "subtype" : "curl", "curl" : "http://component.coolsystem.company.domain" },
 		{ "type" : "management", "subtype" : "cname", "cname" : "Some important component" },
-		{ "type" : "management", "subtype" : "cpingaddr", "cpingaddr" : "172.17.33.12" }
+		{ "type" : "management", "subtype" : "cpingaddr", "cpingaddr" : "172.17.33.12" },
+		/* Any custom data can be encoded as an MR record as shown below.
+		 * The standard fields (checksums and length) will be filled in automatically.
+		 * You only need to specify the value to put into the type byte and the hex string
+		 * representing the actual data (not including the header) */
+		{ "type" : "custom", "custom_type" : 123, "data": "01020304050607AABBCCDDEEFF" }
 	]
 }

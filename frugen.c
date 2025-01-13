@@ -9,7 +9,7 @@
 #define VERSION "BROKEN"
 #endif
 
-#define COPYRIGHT_YEARS "2016-2024"
+#define COPYRIGHT_YEARS "2016-2025"
 #define MAX_FILE_SIZE 1L * 1024L * 1024L
 
 #define _GNU_SOURCE
@@ -62,12 +62,14 @@ fru_mr_mgmt_type_t fru_mr_mgmt_type_by_name(const char *name)
 	fatal("Invalid FRU MR Management Record type '%s'", name);
 }
 
-const char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
+char * fru_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
 {
+	char *str = NULL;
 	if (type < FRU_MR_MGMT_MIN || type > FRU_MR_MGMT_MAX) {
 		fatal("FRU MR Management Record type %d is out of range", type);
 	}
-	return fru_mr_mgmt_name[MGMT_TYPE_ID(type)];
+	sscanf(fru_mr_mgmt_name[MGMT_TYPE_ID(type)], "%ms", &str);
+	return str;
 }
 
 static

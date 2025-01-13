@@ -1414,6 +1414,74 @@ static bool is_mr_rec_valid(fru_mr_rec_t *rec, size_t limit, fru_flags_t flags)
 	return true;
 }
 
+static int fru_mr_blob2rec(fru_mr_rec_t **rec,
+                           const void *blob,
+                           size_t len,
+                           fru_mr_type_t type)
+{
+	int cksum;
+
+	// Need a valid non-allocated record pointer and a blob
+	if (!rec || *rec) return -EFAULT;
+	if (!blob) return -EFAULT;
+
+	if (type < FRU_MR_MIN || type > FRU_MR_MAX)
+		return -FEMRMGMTRANGE;
+
+	if (len > UINT8_MAX)
+		return -FEMRMGMTSIZE;
+
+	/* At this point we believe the input value is sane */
+	*rec = calloc(1, sizeof(fru_mr_rec_t) + len);
+	if (! *rec) {
+		fru_errno = errno;
+		return -fru_errno;
+	}
+
+	(*rec)->hdr.type_id = type;
+	(*rec)->hdr.eol_ver = FRU_MR_VER;
+	(*rec)->hdr.len = len;
+	memcpy((*rec)->data, blob, len);
+
+	// Checksum the data
+	cksum = calc_checksum((*rec)->data,
+	                      (*rec)->hdr.len);
+	if (cksum < 0) {
+		free(*rec);
+		*rec = NULL;
+		return -FEMRDCKSUM;
+	}
+	(*rec)->hdr.rec_checksum = (uint8_t)cksum;
+
+	// Checksum the header, don't include the checksum byte itself
+	cksum = calc_checksum(&(*rec)->hdr,
+	                      sizeof(fru_mr_header_t) - 1);
+	if (cksum < 0) {
+		free(*rec);
+		*rec = NULL;
+		return -FEMRHCKSUM;
+	}
+	(*rec)->hdr.hdr_checksum = (uint8_t)cksum;
+
+	return 0;
+}
+
+int fru_mr_hexstr2rec(fru_mr_rec_t **rec,
+                      const char *str,
+                      fru_mr_type_t type)
+{
+	size_t len;
+
+	if (!str) return -EFAULT;
+
+	uint8_t * blob;
+	blob = fru_encode_binary_string(&len, str);
+	if (!blob)
+		return -fru_errno;
+
+	return fru_mr_blob2rec(rec, blob, len, type);
+}
+
 static int fru_mr_mgmt_blob2rec(fru_mr_rec_t **rec,
                                 const void *blob,
                                 size_t len,
@@ -1455,6 +1523,7 @@ static int fru_mr_mgmt_blob2rec(fru_mr_rec_t **rec,
 	                      mgmt->hdr.len);
 	if (cksum < 0) {
 		free(mgmt);
+		mgmt = NULL;
 		return -FEMRDCKSUM;
 	}
 	mgmt->hdr.rec_checksum = (uint8_t)cksum;
@@ -1464,6 +1533,7 @@ static int fru_mr_mgmt_blob2rec(fru_mr_rec_t **rec,
 	                      sizeof(fru_mr_header_t) - 1);
 	if (cksum < 0) {
 		free(mgmt);
+		mgmt = NULL;
 		return -FEMRHCKSUM;
 	}
 	mgmt->hdr.hdr_checksum = (uint8_t)cksum;
@@ -1626,6 +1696,33 @@ int fru_mr_mgmt_rec2str(char **str, fru_mr_mgmt_rec_t *mgmt,
 
 	memcpy(*str, mgmt->data, mgmt->hdr.len);
 
+	return 0;
+}
+
+int fru_mr_rec2hexstr(char **str, fru_mr_rec_t *rec,
+                      fru_flags_t flags)
+{
+	if (!rec || !str) {
+		fru_errno = EFAULT;
+		return -EFAULT;
+	}
+
+	fru_errno = 0;
+	if (!is_mr_rec_valid(rec, SIZE_MAX, flags)) {
+		return -fru_errno;
+	}
+
+	size_t len = rec->hdr.len * 2 + 1;
+	*str = calloc(1, len);
+	if (!*str) {
+		fru_errno = errno;
+		return -fru_errno;
+	}
+
+	if (!fru_decode_raw_binary(rec->data, rec->hdr.len, *str, len)) {
+		fru_errno = ENOMEM;
+		return -fru_errno;
+	}
 	return 0;
 }
 
