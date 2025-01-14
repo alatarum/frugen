@@ -431,7 +431,7 @@ bool json_from_mr_reclist(json_object **jso,
 
 			sscanf("type", "%ms", &keys[0]); // This is common for all valid MR records
 			for (; j < key_count; j++) {
-				struct json_object *vobj;
+				struct json_object *vobj = NULL;
 
 				if (!keys[j] || (MR_TYPE_STR == types[j] && !values[j].str))
 					fatal("Internal error. Required key or value not found. Please report.");
@@ -447,6 +447,7 @@ bool json_from_mr_reclist(json_object **jso,
 						values[j].num = 0;
 						break;
 					default:
+						break;
 				}
 				if (!vobj)
 					fatal("Failed to allocate a JSON object for value of '%s'", keys[j]);
