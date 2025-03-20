@@ -116,9 +116,6 @@ The frugen tool supports the following (limitations imposed by the libfru librar
 
   * Internal use area creation/modification is available only from template file,
     not available from the command line arguments.
-  * You should specify the UUID either in the template file OR in the command
-    line, not both. The command line does NOT override the template file in
-    that regard, but creates an additional UUID record, which may be undesired.
 
 _NOTE:_ You may use `frugen` to modify some standard fields even on FRU files that
         contain unsupported multirecord area records if you use binary input and
@@ -273,8 +270,7 @@ Options:
 		Don't use current system date/time for board mfg. date, use 'Unspecified'.
 
 	-U <argument>, --mr-uuid <argument>
-		Set System Unique ID (UUID/GUID)
-		NOTE: This does NOT replace the data specified in the template.
+		Add/update a System Unique ID (UUID/GUID) record in MR area
 
 	-v, --verbose
 		Increase program verbosity (debug) level.

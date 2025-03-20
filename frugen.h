@@ -27,10 +27,13 @@ struct frugen_config_s {
 	frugen_format_t format;
 	frugen_format_t outformat;
 	fru_flags_t flags;
-	bool no_curr_date; // Don't use current timestamp if no 'date' is specified
 };
 
 extern volatile int debug_level;
+extern const struct area_names_s {
+	const char * json;
+	const char * human;
+} area_names[FRU_TOTAL_AREAS];
 
 #define fatal(fmt, args...) do {  \
 	fprintf(stderr, fmt, ##args); \
@@ -47,6 +50,14 @@ extern volatile int debug_level;
 	errno = e;                    \
 } while(0)
 
+#define fru_fatal(fmt, args...) do { \
+	fatal(fmt ": %s", ##args, fru_strerr(fru_errno)); \
+} while(0)
+
+#define fru_warn(fmt, args...) do { \
+	warn(fmt ": %s", ##args, fru_strerr(fru_errno)); \
+} while(0)
+
 #define debug(level, fmt, args...) do { \
 	typeof(errno) e = errno;            \
 	if(level <= debug_level) {          \
@@ -59,14 +70,17 @@ extern volatile int debug_level;
 } while(0)
 
 #define FRU_FIELD_CUSTOM (-1) // Applicable to any area
+
 typedef struct {
-	field_type_t type;
+	fru_field_enc_t type;
 	fru_area_type_t area;
 	union {
+#ifdef DEBUG
 		// The named enums are just aliases for debug convenience only
 		fru_chassis_field_t chassis;
 		fru_board_field_t board;
 		fru_prod_field_t product;
+#endif
 		int index;
 	} field;
 	char *value;
@@ -77,7 +91,8 @@ typedef struct {
 /**
  * Convert local date/time string to UTC time in seconds for FRU
  */
-bool datestr_to_tv(const char *datestr, struct timeval *tv);
+bool datestr_to_tv(struct timeval *tv, const char *datestr);
+
 /**
  * Convert FRU time (in UTC) to a local date/time string
  */
@@ -145,8 +160,8 @@ const char * frugen_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type);
  * @retval 1..4 The encoding type
  * @retval FIELD_TYPE_UNKNOWN Type name is not recognized
  */
-field_type_t frugen_enc_type_by_name(const char *name);
+fru_field_enc_t frugen_enc_by_name(const char *name);
 /**
- * The opposite of frugen_enc_type_by_name()
+ * The opposite of frugen_enc_by_name()
  */
-const char * frugen_enc_name_by_type(field_type_t type);
+const char * frugen_enc_name_by_val(fru_field_enc_t type);

@@ -7,39 +7,43 @@
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 
+
 #include <assert.h>
-#include <time.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <string.h>
+#include <time.h>
 
 #include <json-c/json.h>
 
-#include "fru-errno.h"
+#include "fru_errno.h"
 #include "frugen-json.h"
 
 #if (JSON_C_MAJOR_VERSION == 0 && JSON_C_MINOR_VERSION < 13)
+#include <string.h>
+static // Don't export the local definition
 int
 json_object_to_fd(int fd, struct json_object *obj, int flags)
 {
-	// implementation is copied from json-c v0.13
+	// implementation is copied from json-c v0.13 with minor refactoring
 	int ret;
 	const char *json_str;
-	unsigned int wpos, wsize;
+	size_t pos, size;
 
 	if (!(json_str = json_object_to_json_string_ext(obj, flags))) {
 		return -1;
 	}
 
-	/* CAW: probably unnecessary, but the most 64bit safe */
-	wsize = (unsigned int)(strlen(json_str) & UINT_MAX);
-	wpos = 0;
-	while(wpos < wsize) {
-		if((ret = write(fd, json_str + wpos, wsize-wpos)) < 0) {
+	size = strlen(json_str);
+	pos = 0;
+	while(pos < size) {
+		if((ret = write(fd, json_str + pos, size - pos)) < 0) {
 			return -1;
 		}
 
-		/* because of the above check for ret < 0, we can safely cast and add */
-		wpos += (unsigned int)ret;
+		/* because of the above check for ret < 0, we can safely add */
+		pos += ret;
 	}
 
 	return 0;
@@ -47,271 +51,325 @@ json_object_to_fd(int fd, struct json_object *obj, int flags)
 #endif
 
 static
-bool json_fill_fru_area_fields(json_object *jso, int count,
-                               const char *fieldnames[],
-                               fru_field_t *fields[])
+bool load_single_field(fru_field_t * field, json_object * jsfield)
 {
-	int i;
-	json_object *jsfield;
-	bool data_in_this_area = false;
-	for (i = 0; i < count; i++) {
-		if (json_object_object_get_ex(jso, fieldnames[i], &jsfield)) {
-			// field is an object
-			json_object *typefield, *valfield;
-			if (json_object_object_get_ex(jsfield, "type", &typefield) &&
-			    json_object_object_get_ex(jsfield, "data", &valfield)) {
-				// expected subfields are type and val
-				const char *type = json_object_get_string(typefield);
-				const char *val = json_object_get_string(valfield);
-				field_type_t field_type;
-				field_type = frugen_enc_type_by_name(type);
-				if (FIELD_TYPE_UNKNOWN == field_type) {
-					debug(1, "Unknown type %s for field '%s'",
-					      type, fieldnames[i]);
-					continue;
-				}
-				fru_loadfield(fields[i], val, field_type);
-				debug(2, "Field %s '%s' (%s) loaded from JSON",
-				      fieldnames[i], val, type);
-				data_in_this_area = true;
-			} else {
-				const char *s = json_object_get_string(jsfield);
-				debug(2, "Field %s '%s' loaded from JSON",
-				      fieldnames[i], s);
-				fru_loadfield(fields[i], s, FIELD_TYPE_AUTO);
-				data_in_this_area = true;
-			}
+	bool rc = false;
+
+	// jsfield is either an object or a string.
+	// First assume it's an object with 'type' and 'data' fields.
+	json_object *typefield, *valfield;
+	const char * val;
+	fru_field_enc_t encoding = FRU_FE_UNKNOWN;
+	if (json_object_object_get_ex(jsfield, "type", &typefield) &&
+	    json_object_object_get_ex(jsfield, "data", &valfield))
+	{
+		// expected subfields are type and val
+		const char * type = json_object_get_string(typefield);
+		val = json_object_get_string(valfield);
+		encoding = frugen_enc_by_name(type);
+		if (FRU_FE_UNKNOWN == encoding) {
+			warn("Unknown encoding type '%s', using 'auto'", type);
+			encoding = FRU_FE_AUTO;
+		}
+	} else {
+		// Apparently, jsfield is not an object.
+		// It must be a string then.
+		encoding = FRU_FE_AUTO;
+		val = json_object_get_string(jsfield);
+		if (!val) {
+			fru_warn("Field is neither an object, nor a string");
+			goto out;
 		}
 	}
 
-	return data_in_this_area;
+	if (!fru_setfield(field, encoding, val)) {
+		fru_warn("Couldn't add field");
+		goto out;
+	}
+
+	rc = true;
+out:
+	return rc;
 }
 
 static
-bool json_fill_fru_area_custom(json_object *jso, fru_reclist_t **custom)
+bool load_info_fields(fru_t * fru, fru_area_type_t atype,
+                      json_object *jso)
 {
-	int i, alen;
+	bool rc = false;
 	json_object *jsfield;
-	bool data_in_this_area = false;
-	fru_reclist_t *custptr;
+	const char * const jsnames[FRU_INFO_AREAS][FRU_MAX_FIELD_COUNT] = {
+		[FRU_INFOIDX(CHASSIS)] = {
+			"pn",
+			"serial"
+		},
+		[FRU_INFOIDX(BOARD)] = {
+			"mfg",
+			"pname",
+			"serial",
+			"pn",
+			"file"
+		},
+		[FRU_INFOIDX(PRODUCT)] = {
+			"mfg",
+			"pname",
+			"pn",
+			"ver",
+			"serial",
+			"atag",
+			"file"
+		}
+	};
 
-	if (!custom)
-		return false;
+	/* First load mandatory fields */
+
+	size_t field_idx = FRU_LIST_HEAD;
+	fru_field_t * field;
+	int infoidx = FRU_ATYPE_TO_INFOIDX(atype);
+	while ((field = fru_getfield(fru, atype, field_idx))) {
+		const char * jsname = jsnames[infoidx][field_idx];
+		if (!json_object_object_get_ex(jso, jsname, &jsfield)) {
+			debug(2, "Field '%s' not found for area '%s', skipping",
+			      jsname, area_names[atype].json);
+			goto nextloop;
+		}
+
+		if (!load_single_field(field, jsfield)) {
+			warn("Failed to parse or add field '%s'", jsname);
+			goto out;
+		}
+
+	nextloop:
+		field_idx++;
+		debug(2, "Field '%s' = '%s' (%s) loaded from JSON",
+		      jsname, field->val, frugen_enc_name_by_val(field->enc));
+	}
+
+	/* Now load custom fields */
 
 	json_object_object_get_ex(jso, "custom", &jsfield);
-	if (!jsfield)
-		return false;
+	if (!jsfield) {
+		debug(2, "No custom field list provided");
+		rc = true;
+		goto out;
+	}
 
-	if (json_object_get_type(jsfield) != json_type_array)
+	if (json_object_get_type(jsfield) != json_type_array) {
+		warn("Field 'custom' is not a list object");
 		return false;
+	}
 
-	alen = json_object_array_length(jsfield);
+	size_t alen = json_object_array_length(jsfield);
 	if (!alen)
-		return false;
+		debug(1, "Custom list is present but empty");
 
-	for (i = 0; i < alen; i++) {
-		const char *type = NULL;
-		const void *data = NULL;
-		fru_field_t *field = NULL;
-		json_object *item, *ifield;
+	for (size_t i = 0; i < alen; i++) {
+		fru_field_t field;
+		json_object *item;
 
 		item = json_object_array_get_idx(jsfield, i);
-		if (!item) continue;
-
-		json_object_object_get_ex(item, "type", &ifield);
-		if (!ifield || !(type = json_object_get_string(ifield))) {
-			debug(3, "Using automatic text encoding for custom field %d", i);
-			type = "auto";
-		}
-
-		json_object_object_get_ex(item, "data", &ifield);
-		if (!ifield || !(data = json_object_get_string(ifield))) {
-			debug(3, "Emtpy data or no data at all found for custom field %d", i);
+		if (!item)
 			continue;
+
+		if (!load_single_field(&field, item)) {
+			warn("Failed to load custom field %zu", i);
+			goto out;
 		}
 
-		debug(4, "Custom pointer before addition was %p", *custom);
-		custptr = add_reclist(custom);
-		debug(4, "Custom pointer after addition is %p", *custom);
-
-		if (!custptr)
-			return false;
-
-		field = calloc(1, sizeof(*field));
-		if (!field) {
-			free_reclist(custptr);
-			return false;
+		if (!fru_add_custom(fru, atype, FRU_LIST_TAIL, field.enc, field.val)) {
+			fru_warn("Failed to add custom field %zu", i);
+			goto out;
 		}
-		field->type = FIELD_TYPE_AUTO;
-		if (!strcmp("binary", type)) {
-			field->type = FIELD_TYPE_BINARY;
-		} else if (!strcmp("bcdplus", type)) {
-			field->type = FIELD_TYPE_BCDPLUS;
-		} else if (!strcmp("6bitascii", type)) {
-			field->type = FIELD_TYPE_6BITASCII;
-		} else if (!strcmp("text", type)) {
-			field->type = FIELD_TYPE_TEXT;
-		} else {
-			debug(3, "The custom field will be auto-typed");
-		}
-		strncpy(field->val, data, FRU_FIELDMAXLEN);
-		custptr->rec = field;
 
-		if (!custptr->rec) {
-			fatal("Failed to encode custom field. Memory allocation or field length problem.");
-		}
-		debug(2, "Custom field %i has been loaded from JSON at %p->rec = %p", i, *custom, (*custom)->rec);
-		data_in_this_area = true;
+		debug(2, "Custom field %zu has been loaded from JSON", i);
 	}
 
-	custptr = *custom;
-	debug(4, "Walking all custom fields from %p...", custptr);
-	while(custptr) {
-		debug(4, "Custom %p, next %p", custptr, custptr->next);
-		custptr = custptr->next;
-	}
+	rc = true;
 
-	return data_in_this_area;
+out:
+	return rc;
 }
 
 static
-bool json_fill_fru_mr_reclist(json_object *jso, fru_mr_reclist_t **mr_reclist)
+bool load_mr_mgmt_record(fru_t * fru,
+                         size_t i,
+                         json_object * item)
 {
-	int i, alen;
-	fru_mr_reclist_t *mr_reclist_tail;
-	bool has_multirec = false;
+	bool rc = false;
+	const char *subtype = NULL;
+	fru_mr_mgmt_type_t subtype_id;
+	json_object * ifield;
 
-	if (!mr_reclist)
+	json_object_object_get_ex(item, "subtype", &ifield);
+	if (!ifield || !(subtype = json_object_get_string(ifield))) {
+		warn("Each management record must have a subtype");
+		goto out;
+	}
+
+	debug(3, "Management record %zu subtype is '%s'", i, subtype);
+	subtype_id = frugen_mr_mgmt_type_by_name(subtype);
+	if (!FRU_MR_MGMT_IS_SUBTYPE_VALID(subtype_id))
 		goto out;
 
-	if (json_object_get_type(jso) != json_type_array)
+	debug(3, "Management record %zu subtype ID is '%d'", i, subtype_id);
+
+	fru_mr_rec_t mr_rec = {};
+
+	mr_rec.type = FRU_MR_MGMT_ACCESS;
+	mr_rec.mgmt.subtype = subtype_id;
+
+	json_object_object_get_ex(item, subtype, &ifield);
+	if (!ifield) {
+		warn("Field '%s' not found for record %zu data", subtype, i);
 		goto out;
+	}
 
-	alen = json_object_array_length(jso);
-	if (!alen)
+	const char * field_data = json_object_get_string(ifield);
+	if (!field_data) {
+		warn("Field '%s' is not a string for MR record %zu", subtype, i);
 		goto out;
+	}
+	strncpy(mr_rec.mgmt.data,
+	        field_data,
+	        FRU_MIN(sizeof(mr_rec.mgmt.data) - 1,
+	                strlen(field_data)
+	        )
+	);
 
-	debug(4, "Multirecord area record list is initially at %p", *mr_reclist);
+	/* Always add to the tail, one by one, sparse addition is not supported */
+	if (!fru_add_mr(fru, FRU_LIST_TAIL, &mr_rec)) {
+		fru_warn("Failed to add MR management record %zu", i);
+		goto out;
+	}
 
-	for (i = 0; i < alen; i++) {
-		const char *type = NULL;
-		json_object *item, *ifield;
+	rc = true;
+
+out:
+	return rc;
+}
+
+static
+bool load_mr_record(fru_t * fru, size_t i, json_object * item)
+{
+	bool rc = false;
+
+	const char *type = NULL;
+	json_object *ifield;
+
+	json_object_object_get_ex(item, "type", &ifield);
+	if (!ifield || !(type = json_object_get_string(ifield))) {
+		warn("Each multirecord area record must have a type specifier");
+		goto out;
+	}
+
+	debug(3, "Record is of type '%s'", type);
+	if (!strcmp(type, "management")) {
+		if (!load_mr_mgmt_record(fru, i, item)) {
+			goto out;
+		}
+	}
+	else if (!strcmp(type, "custom")) {
+		debug(1, "Found a custom MR record");
+		int32_t custom_type = FRU_MR_EMPTY;
+		json_object_object_get_ex(item, "custom_type", &ifield);
+		if (!ifield) {
+			warn("Each custom MR record must have "
+			     "a 'custom_type' (0...255)");
+			goto out;
+		}
+
+		custom_type = json_object_get_int(ifield);
+		if (!FRU_MR_IS_VALID_TYPE(custom_type)) {
+			warn("Custom type %" PRIi32 " for record %zu "
+			     "is out of range (0...255)",
+			     custom_type, i);
+			goto out;
+		}
+
+		const char *hexstr = NULL;
+		json_object_object_get_ex(item, "data", &ifield);
+		hexstr = json_object_get_string(ifield);
+		if (!ifield || !hexstr) {
+			warn("A custom MR record %zu must have 'data' "
+			     "field with a hex string", i);
+		}
+
+		fru_mr_rec_t mr_rec = {
+			.type = FRU_MR_RAW,
+			.raw.type = custom_type,
+		};
+
+		strncpy(mr_rec.raw.data,
+			hexstr,
+			FRU_MIN(sizeof(mr_rec.raw.data) - 1,
+				strlen(hexstr)
+			)
+		);
+
+		/* Always add to the tail, one by one, sparse addition is not supported */
+		if (!fru_add_mr(fru, FRU_LIST_TAIL, &mr_rec)) {
+			fru_warn("Failed to add a custom MR record");
+			goto out;
+		}
+
+		debug(2, "Custom MR data loaded from JSON: %s", hexstr);
+	}
+/* TODO Fix this */
+#if 0
+	else if (!strcmp(type, "psu")) {
+		debug(1, "Found a PSU info record (not yet supported, skipped)");
+		continue;
+	}
+#endif
+	else {
+		warn("Multirecord type '%s' is not supported in JSON", type);
+		goto out;
+	}
+
+
+	rc = true;
+out:
+	return rc;
+}
+
+static
+bool load_mr_area(fru_t * fru, json_object * jso)
+{
+	(void)fru;
+	bool rc = false;
+
+	if (json_object_get_type(jso) != json_type_array) {
+		warn("'multirec' object is not an array");
+		goto out;
+	}
+
+	size_t alen = json_object_array_length(jso);
+	if (!alen) {
+		debug(1, "Multirecord area is an empty list");
+		goto out;
+	}
+
+	for (size_t i = 0; i < alen; i++) {
+		json_object *item;
 
 		item = json_object_array_get_idx(jso, i);
-		if (!item) continue;
-
-		debug(3, "Parsing record #%d/%d", i + 1, alen);
-
-		json_object_object_get_ex(item, "type", &ifield);
-		if (!ifield || !(type = json_object_get_string(ifield))) {
-			fatal("Each multirecord area record must have a type specifier");
-		}
-
-		debug(3, "Record is of type '%s'", type);
-
-		mr_reclist_tail = add_reclist(mr_reclist);
-		if (!mr_reclist_tail)
-			fatal("JSON: Failed to allocate multirecord area list");
-
-		debug(4, "Multirecord area record list is now at %p", *mr_reclist);
-		debug(4, "Multirecord area record list tail is at %p", mr_reclist_tail);
-
-		if (!strcmp(type, "management")) {
-			const char *subtype = NULL;
-			fru_mr_mgmt_type_t subtype_id;
-			json_object_object_get_ex(item, "subtype", &ifield);
-			if (!ifield || !(subtype = json_object_get_string(ifield))) {
-				fatal("Each management record must have a subtype");
-			}
-
-			debug(3, "Management record subtype is '%s'", subtype);
-			subtype_id = frugen_mr_mgmt_type_by_name(subtype);
-			if (!subtype_id) {
-				fatal("Management record subtype '%s' is invalid", subtype);
-			}
-
-			debug(3, "Management record subtype ID is '%d'", subtype_id);
-
-			if (!strcmp(subtype, "uuid")) {
-				const char *uuid = NULL;
-				json_object_object_get_ex(item, "uuid", &ifield);
-				if (ifield) {
-					uuid = json_object_get_string(ifield);
-				}
-
-				if (!ifield || !uuid) {
-					fatal("A uuid management record must have a uuid field");
-				}
-
-				debug(3, "Parsing UUID %s", uuid);
-				fru_errno = fru_mr_uuid2rec(&mr_reclist_tail->rec, uuid);
-				if (fru_errno)
-					fatal("Failed to convert UUID: %s", fru_strerr(fru_errno));
-				debug(2, "System UUID loaded from JSON: %s", uuid);
-				has_multirec = true;
-			}
-			else {
-				int err;
-				const char *val = NULL;
-				json_object_object_get_ex(item, subtype, &ifield);
-				if (ifield) {
-					val = json_object_get_string(ifield);
-				}
-
-				if (!ifield || !val) {
-					fatal("Management record '%s' must have a '%s' field",
-					      subtype, subtype);
-				}
-
-				err = fru_mr_mgmt_str2rec(&mr_reclist_tail->rec,
-				                          val, subtype_id);
-				if (err) {
-					fatal("Failed to convert '%s' to a record: %s",
-						  subtype, strerror(err < 0 ? -err : err));
-				}
-				debug(2, "Loaded '%s' from JSON: %s", subtype, val);
-				has_multirec = true;
-			}
-		}
-		else if (!strcmp(type, "psu")) {
-			debug(1, "Found a PSU info record (not yet supported, skipped)");
+		if (!item)
 			continue;
-		}
-		else if (!strcmp(type, "custom")) {
-			debug(1, "Found a custom MR record");
-			int32_t custom_type = FRU_MR_INVALID;
-			json_object_object_get_ex(item, "custom_type", &ifield);
-			if (!ifield
-			    || FRU_MR_MIN > (custom_type = json_object_get_int(ifield))
-			    || FRU_MR_MAX < custom_type)
-			{
-				fatal("Each custom MR record must have a custom_type (0...255)");
-			}
-			const char *hexstr = NULL;
-			json_object_object_get_ex(item, "data", &ifield);
-			if (!ifield) {
-				fatal("data field is missing for a custom MR record");
-			}
-			hexstr = json_object_get_string(ifield);
 
-			fru_errno = fru_mr_hexstr2rec(&mr_reclist_tail->rec, hexstr, custom_type);
-			if (fru_errno)
-				fatal("Failed to convert custom MR data: %s", fru_strerr(fru_errno));
-			debug(2, "Custom MR data loaded from JSON: %s", hexstr);
-			has_multirec = true;
-
-			continue;
-		}
-		else {
-			fatal("Multirecord type '%s' is not supported", type);
-			continue;
+		debug(3, "Parsing record #%zu/%zu", i + 1, alen);
+		if (!load_mr_record(fru, i, item)) {
+			warn("Failed to load MR record #%zu from JSON", i);
+			goto out;
 		}
 	}
 
+	rc = true;
+
 out:
-	return has_multirec;
+	return rc;
 }
 
+#if 0
 /**
  * Allocate a multirecord area json object \a jso and build it from
  * the supplied multirecord area record list \a mr_reclist
@@ -472,7 +530,9 @@ out:
 	*jso = mr_jso;
 	return rc;
 }
+#endif
 
+#if 0
 static
 int json_object_add_with_type(struct json_object* obj,
                               const char* key,
@@ -483,10 +543,10 @@ int json_object_add_with_type(struct json_object* obj,
 	if ((string = json_object_new_string((const char *)val)) == NULL)
 		goto STRING_ERR;
 
-	if (type == FIELD_TYPE_AUTO) {
+	if (type == FRU_FE_AUTO) {
 		entry = string;
 	} else {
-		const char *enc_name = fru_enc_name_by_type(type);
+		const char *enc_name = frugen_enc_name_by_val(type);
 		if ((type_string = json_object_new_string(enc_name)) == NULL)
 			goto TYPE_STRING_ERR;
 		if ((entry = json_object_new_object()) == NULL)
@@ -508,22 +568,94 @@ TYPE_STRING_ERR:
 STRING_ERR:
 	return -1;
 }
+#endif
+
+static
+bool load_info_area(fru_t * fru,
+                             fru_area_type_t atype,
+                             json_object * jso)
+{
+	if (!load_info_fields(fru, atype, jso)) {
+		warn("Couldn't load standard fields for %s",
+		      area_names[atype].human);
+		return false;
+	}
+
+	json_object * jsfield;
+	if (FRU_CHASSIS_INFO == atype) {
+		json_object_object_get_ex(jso, "type", &jsfield);
+		if (jsfield) {
+			errno = 0;
+			fru->chassis.type = json_object_get_int(jsfield);
+			if (errno)
+				warn("chassis.type is not an integer, zeroed");
+
+			debug(2, "Chassis type 0x%02X loaded from JSON",
+			      fru->chassis.type);
+		}
+	}
+	else if(FRU_BOARD_INFO == atype || FRU_PRODUCT_INFO == atype) {
+		json_object_object_get_ex(jso, "lang", &jsfield);
+		if (jsfield) {
+			errno = 0;
+			fru->board.lang = json_object_get_int(jsfield);
+			if (errno) {
+				warn("board.lang is not an integer, using English");
+				fru->board.lang = FRU_LANG_ENGLISH;
+			}
+
+			debug(2, "Board language %d loaded from JSON",
+			      fru->board.lang);
+		}
+
+		if (FRU_BOARD_INFO == atype) {
+			json_object_object_get_ex(jso, "date", &jsfield);
+			if (jsfield) {
+				const char *s = json_object_get_string(jsfield);
+				// get_string doesn't return any errors
+
+				if (!datestr_to_tv(&fru->board.tv, s)) {
+					warn("Invalid board date/time format in JSON file");
+					return false;
+				}
+
+				fru->present[FRU_BOARD_INFO] = true;
+				fru->board.tv_auto = false;
+
+				debug(2, "Board date '%s' loaded from JSON", s);
+			}
+		}
+	}
+	return true;
+}
 
 void frugen_loadfile_json(fru_t * fru, const char * fname)
 {
-	json_object *jstree, *jso, *jsfield;
-	json_object_iter iter;
+	bool success = false;
+	json_object *jstree;
 
-	debug(2, "Data format is JSON");
+	debug(2, "Loading JSON from %s", fname);
 	/* Allocate a new object and load contents from file */
 	jstree = json_object_from_file(fname);
 	if (NULL == jstree)
 		fatal("Failed to load JSON FRU object from %s", fname);
 
-	json_object_object_foreachC(jstree, iter) {
-		jso = iter.val;
-		if (!strcmp(iter.key, "internal")) {
-			size_t len;
+	fru_area_type_t atype;
+	FRU_FOREACH_AREA(atype) {
+		json_object * jso;
+		if (!json_object_object_get_ex(jstree, area_names[atype].json, &jso)) {
+			debug(2, "%s Area ('%s') is not found in JSON",
+			      area_names[atype].human, area_names[atype].json);
+			continue;
+		}
+
+		// Add an area to the end of FRU file, that way we ensure
+		// that areas in the output are in the same order as in the input JSON`
+		fru_enable_area(fru, atype, FRU_APOS_LAST);
+		debug(2, "Found %s Area in input template", area_names[atype].human);
+
+		/* Intenal Use area needs special handling */
+		if (FRU_INTERNAL_USE == atype) {
 			const char *data = json_object_get_string(jso);
 			if (!data) {
 				debug(2, "Internal use are w/o data, skipping");
@@ -531,107 +663,66 @@ void frugen_loadfile_json(fru_t * fru, const char * fname)
 			}
 
 			if (!fru_set_internal_hexstring(fru, data)) {
-				fatal("Failed to load internal use area: %s",
-				      fru_strerr(fru_errno));
+				fru_warn("Failed to load internal use area");
+				goto out;
 			}
 
-			debug(2, "Internal use area data loaded from JSON");
-			continue;
-		} else if (!strcmp(iter.key, "chassis")) {
-			const char *fieldname[] = { "pn", "serial" };
-			fru_field_t * field[] = {
-				&fru->chassis.pn, &fru->chassis.serial
-			};
-			json_object_object_get_ex(jso, "type", &jsfield);
-			if (jsfield) {
-				fru->chassis.type = json_object_get_int(jsfield);
-				debug(2, "Chassis type 0x%02X loaded from JSON",
-				      fru->chassis.type);
-				fru->present[FRU_CHASSIS_INFO] = true;
-			}
-			/* Now get values for the string fields */
-			fru->present[FRU_CHASSIS_INFO] |=
-				json_fill_fru_area_fields(jso, ARRAY_SZ(field), fieldname,
-				                          field);
-			debug(9, "chassis custom was %p", fru->chassis.cust);
-			fru->present[FRU_CHASSIS_INFO] |=
-				json_fill_fru_area_custom(jso, &fru->chassis.cust);
-			debug(9, "chassis custom now %p", fru->chassis.cust);
-		} else if (!strcmp(iter.key, "board")) {
-			const char *fieldname[] = {
-				"mfg", "pname", "pn", "serial", "file"
-			};
-			fru_field_t *field[] = {
-				&fru->board.mfg,
-				&fru->board.pname,
-				&fru->board.pn,
-				&fru->board.serial,
-				&fru->board.file
-			};
-			/* Get values for non-string fields */
-#if 0 /* TODO: Language support is not implemented yet */
-			json_object_object_get_ex(jso, "lang", &jsfield);
-			if (jsfield) {
-				fru->board.lang = json_object_get_int(jsfield);
-				debug(2, "Board language 0x%02X loaded from JSON", fru->board.lang);
-				info->has_board = true;
-			}
-#endif
-			json_object_object_get_ex(jso, "date", &jsfield);
-			if (jsfield) {
-				const char *date = json_object_get_string(jsfield);
-				debug(2, "Board date '%s' will be loaded from JSON", date);
-				if (!datestr_to_tv(date, &fru->board.tv))
-					fatal("Invalid board date/time format in JSON file");
-				fru->present[FRU_BOARD_INFO] = true;
-				fru->board.tv_auto = false;
-			}
-			/* Now get values for the string fields */
-			fru->present[FRU_BOARD_INFO] |=
-				json_fill_fru_area_fields(jso, ARRAY_SZ(field),
-			                              fieldname, field);
-			debug(9, "board custom was %p", fru->board.cust);
-			fru->present[FRU_BOARD_INFO] |=
-				json_fill_fru_area_custom(jso, &fru->board.cust);
-			debug(9, "board custom now %p", fru->board.cust);
-		} else if (!strcmp(iter.key, "product")) {
-			const char *fieldname[] = {
-				"mfg", "pname", "pn", "ver", "serial", "atag", "file"
-			};
-			fru_field_t *field[] = {
-				&fru->product.mfg,
-				&fru->product.pname,
-				&fru->product.pn,
-				&fru->product.ver,
-				&fru->product.serial,
-				&fru->product.atag,
-				&fru->product.file
-			};
-#if 0 /* TODO: Language support is not implemented yet */
-			/* Get values for non-string fields */
-			json_object_object_get_ex(jso, "lang", &jsfield);
-			if (jsfield) {
-				product.lang = json_object_get_int(jsfield);
-				debug(2, "Product language 0x%02X loaded from JSON", product.lang);
-				info->has_product = true;
-			}
-#endif
-			/* Now get values for the string fields */
-			fru->present[FRU_PRODUCT_INFO] |=
-				json_fill_fru_area_fields(jso, ARRAY_SZ(field), fieldname,
-				                          field);
-			fru->present[FRU_PRODUCT_INFO] |=
-				json_fill_fru_area_custom(jso, &fru->product.cust);
-		} else if (!strcmp(iter.key, "multirecord")) {
-			debug(2, "Processing multirecord area records");
-			json_fill_fru_mr_reclist(fru, jso);
+			goto nextloop;
 		}
+
+		if (FRU_IS_INFO_AREA(atype)) {
+			if (!load_info_area(fru, atype, jso)) {
+				warn("Incorrect definition of %s Area in input json",
+				     area_names[atype].human);
+				goto out;
+			}
+
+			goto nextloop;
+		}
+
+		/* Here it can only be FRU_MR */
+		debug(2, "Processing multirecord area records");
+		if (!load_mr_area(fru, jso))
+			goto out;
+
+		if (!fru->mr) {
+			fru_disable_area(fru, FRU_MR);
+			warn("Disabled an empty %s Area", area_names[atype].human);
+		}
+
+	nextloop:
+		debug(2, "%s Area loaded from JSON", area_names[atype].human);
 	}
 
+	// Now as we've loaded everything, validate it by passing through
+	// libfru encoder and decoder
+	size_t fullsize = 0;
+	uint8_t *frubuf = NULL;
+	if (!fru_savebuffer((void **)&frubuf, &fullsize, fru)) {
+		fru_warn("Failed to encode the loaded JSON");
+		goto out;
+	}
+	fru_free(fru);
+	fru = fru_loadbuffer(NULL, frubuf, fullsize, FRU_NOFLAGS);
+	if (!fru) {
+		fru_warn("Failed to decode the FRU encoded from JSON");
+		goto out;
+	}
+
+	success = true;
+out:
+	
+	if (!success) {
+		if (FRU_IS_VALID_AREA(atype))
+			fatal("Failed to load %s (%d) Area", area_names[atype].human, (int)atype);
+		else
+			fatal("Failed to load FRU from JSON file");
+	}
 	/* Deallocate the JSON object */
 	json_object_put(jstree);
 }
 
+#if 0
 void save_to_json_file(FILE **fp, const char *fname,
                        const struct frugen_fruinfo_s *info,
                        const struct frugen_config_s *config)
@@ -725,3 +816,4 @@ void save_to_json_file(FILE **fp, const char *fname,
 					  JSON_C_TO_STRING_PRETTY | JSON_C_TO_STRING_SPACED);
 	json_object_put(json_root);
 }
+#endif

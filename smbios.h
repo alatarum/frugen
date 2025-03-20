@@ -10,7 +10,7 @@
 
 #pragma once
 
-enum {
+enum fru_smbios_chassis_e {
 	SMBIOS_CHASSIS_UNDEFINED,
 	SMBIOS_CHASSIS_OTHER,
 	SMBIOS_CHASSIS_UNKNOWN,
