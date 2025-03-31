@@ -70,7 +70,7 @@ configure_file(fru.h.in fru.h @ONLY)
 include("doxygen.cmake")
 set(DOXY_PROJECT_NUMBER "${gitver}")
 set(DOXY_OUTPUT_LANGUAGE "English")
-set(DOXY_INPUT ${PROJECT_SOURCE_DIR})
+set(DOXY_INPUT "${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/build")
 set(DOXY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/docs")
 add_documentation(docs Doxyfile)
 
