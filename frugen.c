@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -356,6 +357,51 @@ const char * const field_names[FRU_INFO_AREAS][FRU_MAX_FIELD_COUNT] = {
 	}
 };
 
+fru_errno_t get_fru_errno(void)
+{
+	return fru_errno;
+}
+
+void fru_perror(FILE *fp, const char *fmt, ...)
+{
+	const char * const sources[FERR_LOC_COUNT] = {
+		area_names[FRU_INTERNAL_USE].human,
+		area_names[FRU_CHASSIS_INFO].human,
+		area_names[FRU_BOARD_INFO].human,
+		area_names[FRU_PRODUCT_INFO].human,
+		area_names[FRU_MR].human,
+		"FRU",
+		"frugen",
+	};
+	va_list args;
+	va_start(args, fmt);
+	vfprintf(fp, fmt, args);
+	va_end(args);
+	fprintf(fp, ": %s in %s ",
+	        fru_strerr(fru_errno),
+	        sources[fru_errno.src]);
+
+	if (fru_errno.src != FERR_LOC_GENERAL && fru_errno.src != FERR_LOC_CALLER)
+		fprintf(fp, "Area ");
+
+	if (fru_errno.index >= 0) {
+		if (fru_errno.code == FEAREANOTSUP || fru_errno.code == FEAREABADTYPE) {
+			fprintf(fp, "(%d)", fru_errno.index);
+		}
+		else if (fru_errno.src != FERR_LOC_MR) {
+			/*
+			 * TODO: print field names for standard fields,
+			 *       and adjust custom field indices to base 0
+			 */
+			fprintf(fp, "(field %d)", fru_errno.index);
+		}
+		else {
+			fprintf(fp, "(record %d)", fru_errno.index);
+		}
+	}
+	fputc('\n', fp);
+}
+
 const size_t field_counts[FRU_INFO_AREAS] = {
 	[FRU_INFOIDX(CHASSIS)] = FRU_CHASSIS_FIELD_COUNT,
 	[FRU_INFOIDX(BOARD)] = FRU_BOARD_FIELD_COUNT,
@@ -504,7 +550,7 @@ void load_fromfile(const char * fname,
 	case FRUGEN_FMT_BINARY:
 		fru = fru_loadfile(fru, fname, config->flags);
 		if (!fru) {
-			fatal("Couldn't load FRU file: %s\n", fru_strerr(fru_errno));
+			fru_fatal("Couldn't load FRU file");
 		}
 		break;
 	default:
@@ -573,9 +619,9 @@ void print_info_area(FILE ** fp, const fru_t * fru, fru_area_type_t atype)
 		        "Custom", (intmax_t)idx, encoding, field->val);
 		idx++;
 	}
-	if (fru_errno != FENOFIELD)
-		fprintf(*fp, "   Error getting custom fields: %s\n",
-		        fru_strerr(fru_errno));
+	if (fru_errno.code != FENOFIELD) {
+		fru_perror(*fp, "   Error getting custom fields");
+	}
 
 	printf("\n");
 }

@@ -35,6 +35,8 @@ extern const struct area_names_s {
 	const char * human;
 } area_names[FRU_TOTAL_AREAS];
 
+void fru_perror(FILE *fp, const char *fmt, ...);
+
 #define fatal(fmt, args...) do {  \
 	fprintf(stderr, fmt, ##args); \
 	fprintf(stderr, "\n");        \
@@ -51,11 +53,12 @@ extern const struct area_names_s {
 } while(0)
 
 #define fru_fatal(fmt, args...) do { \
-	fatal(fmt ": %s", ##args, fru_strerr(fru_errno)); \
+	fru_perror(stderr, fmt, ##args); \
+	exit(1); \
 } while(0)
 
 #define fru_warn(fmt, args...) do { \
-	warn(fmt ": %s", ##args, fru_strerr(fru_errno)); \
+	fru_perror(stderr,fmt, ##args); \
 } while(0)
 
 #define debug(level, fmt, args...) do { \
