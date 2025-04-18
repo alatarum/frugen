@@ -33,13 +33,16 @@ void cut_tail(char *s)
  * @retval false Failure.
  */
 static
-bool decode_binary(fru_field_t *out,
+void decode_binary(fru_field_t *out,
                    const fru__file_field_t *field)
 {
-	return fru__decode_raw_binary(field->data,
-	                         FRU__FIELDLEN(field->typelen),
-	                         out->val,
-	                         sizeof(out->val));
+	assert(field);
+	assert(out);
+
+	fru__decode_raw_binary(field->data,
+	                       FRU__FIELDLEN(field->typelen),
+	                       out->val,
+	                       sizeof(out->val));
 }
 
 /**
@@ -51,12 +54,15 @@ bool decode_binary(fru_field_t *out,
  * @retval false Failure.
  */
 static
-bool decode_bcdplus(fru_field_t *out,
+void decode_bcdplus(fru_field_t *out,
                     const fru__file_field_t *field)
 {
 	size_t i;
 	uint8_t c;
 	size_t len;
+
+	assert(field);
+	assert(out);
 
 	len = 2 * FRU__FIELDLEN(field->typelen);
 	/* Need space for nul-byte */
@@ -90,8 +96,6 @@ bool decode_bcdplus(fru_field_t *out,
 	// length was BCD-encoded.
 	cut_tail(out->val);
 	DEBUG("BCD+ string of length %zd decoded: '%s'", len, out->val);
-
-	return true;
 }
 
 /**
@@ -103,14 +107,15 @@ bool decode_bcdplus(fru_field_t *out,
  * @retval false Failure.
  */
 static
-bool decode_6bit(fru_field_t *out,
+void decode_6bit(fru_field_t *out,
                  const fru__file_field_t *field)
 {
 	const uint8_t *s6;
 	size_t len, len6bit;
 	size_t i, i6;
 
-	if (!field) return false;
+	assert(field);
+	assert(out);
 
 	len6bit = FRU__FIELDLEN(field->typelen);
 	s6 = field->data;
@@ -147,8 +152,6 @@ bool decode_6bit(fru_field_t *out,
 	// string that was a byte shorter than a multiple of 4.
 	cut_tail(out->val);
 	DEBUG("6bit ASCII string of length %zd decoded: '%s'", len, out->val);
-
-	return true;
 }
 
 /**
@@ -160,21 +163,26 @@ bool decode_6bit(fru_field_t *out,
  * @retval false Failure (buffer too short)
  */
 static
-bool decode_text(fru_field_t *out,
+void decode_text(fru_field_t *out,
                  const fru__file_field_t *field)
 {
+	assert(field);
+	assert(out);
+
 	size_t len = FRU__FIELDLEN(field->typelen);
 	/* Need space for nul-byte */
 	/* This can never actually happen as fru_field_t.val is fixed size */
 	assert(sizeof(out->val) >= len + 1);
 
 	if (len) {
+		// TODO: Potentially the input fru data may contain something
+		//       non-printable. It would be nice to detect and report
+		//       that on the library level. A flag to ignore the error
+		//       would also be needed in that case.
 		memcpy(out->val, field->data, len);
 	}
 	out->val[len] = 0; /* Terminate the string */
 	DEBUG("text string of length %zd decoded: '%s'", len, out->val);
-
-	return true;
 }
 
 /**
@@ -192,7 +200,7 @@ bool fru__decode_field(fru_field_t *out,
                   const fru__file_field_t *field)
 {
 	fru_field_enc_t enc;
-	bool (*decode[FRU_FE_REALCOUNT])(fru_field_t *,
+	void (*decode[FRU_FE_REALCOUNT])(fru_field_t *,
 	                                  const fru__file_field_t *) =
 	{
 		[FRU_REAL_FE(FRU_FE_BINARY)] = decode_binary,
@@ -202,8 +210,9 @@ bool fru__decode_field(fru_field_t *out,
 	};
 
 	if (!field) {
+		// Area and item will be adjusted by the caller
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		errno = EFAULT;
-		fru_errno = FEGENERIC;
 		return false;
 	}
 
@@ -211,7 +220,8 @@ bool fru__decode_field(fru_field_t *out,
 
 	if (!FRU_FE_IS_REAL(enc)) {
 		DEBUG("ERROR: Field encoding type is invalid (%d)", enc);
-		fru_errno = FEBADENC;
+		// Area and item will be adjusted by the caller
+		fru__seterr(FEBADENC, FERR_LOC_GENERAL, -1);
 		return false;
 	}
 
@@ -225,6 +235,7 @@ bool fru__decode_field(fru_field_t *out,
 
 	memset(out, 0, sizeof(*out));
 	out->enc = enc;
-	return decode[FRU_REAL_FE(enc)](out, field);
+	decode[FRU_REAL_FE(enc)](out, field);
+	return true;
 }
 

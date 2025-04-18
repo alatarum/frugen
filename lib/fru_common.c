@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <assert.h>
 
 //#define DEBUG
 #include "fru-private.h"
@@ -47,18 +48,21 @@ const size_t fru__mr_mgmt_maxlen[FRU_MR_MGMT_INDEX_COUNT] = {
 	[FRU__MGMT_TYPENAME_ID(SYS_UUID)] = 16
 };
 
+/* Numbers of standard string fields per info area */
+const size_t fru__fieldcount[FRU_TOTAL_AREAS] = {
+	[FRU_CHASSIS_INFO] = FRU_CHASSIS_FIELD_COUNT,
+	[FRU_BOARD_INFO] = FRU_BOARD_FIELD_COUNT,
+	[FRU_PRODUCT_INFO] = FRU_PROD_FIELD_COUNT,
+};
+
 int fru__calc_checksum(const void * buf, size_t size)
 {
-	if (!buf || size == 0) {
-		DEBUG("Null pointer or zero buffer length\n");
-		fru_errno = FEGENERIC;
-		errno = EFAULT;
-		return -1;
-	}
+	assert(buf); // buf is never NULL in any of the callers, otherwise it's a bug
 
 	uint8_t * data = (uint8_t *)buf;
 	uint8_t checksum = 0;
 
+	// Checksum of zero data is zero, some MR records may be empty
 	for(size_t i = 0; i < size; i++) {
 		checksum += data[i];
 	}
@@ -69,50 +73,23 @@ int fru__calc_checksum(const void * buf, size_t size)
 
 fru__reclist_t ** fru__get_customlist(const fru_t * fru, fru_area_type_t atype)
 {
-	int err;
-	fru__reclist_t ** ret = NULL;
-
-	fru_errno = FENONE;
-
-	if (!fru) {
-		fru_errno = FEGENERIC;
-		err = EFAULT;
-		goto out;
-	}
-
-	if (atype < FRU_MIN_AREA || atype > FRU_MAX_AREA)
-	{
-		fru_errno = FEAREABADTYPE;
-		goto out;
-	}
-
 	fru__reclist_t ** cust[FRU_TOTAL_AREAS] = {
 		[FRU_CHASSIS_INFO] = (fru__reclist_t **)&fru->chassis.cust,
 		[FRU_BOARD_INFO] = (fru__reclist_t **)&fru->board.cust,
 		[FRU_PRODUCT_INFO] = (fru__reclist_t **)&fru->product.cust,
 	};
 
-	ret = cust[atype];
-
-out:
-	if (fru_errno == FEGENERIC)
-		errno = err;
-
-	return ret;
+	return cust[atype];
 }
 
 void * fru__find_reclist_entry(void * head_ptr, void * prev, size_t index)
 {
+	assert(head_ptr);
+
 	fru__genlist_t * rec,
 	               ** prev_rec = NULL,
 	               ** reclist = (fru__genlist_t **)head_ptr;
 	size_t counter = 0;
-
-	if (!head_ptr) {
-		fru_errno = FEGENERIC;
-		errno = EFAULT;
-		return NULL;
-	}
 
 	rec = *reclist;
 	if (prev) {
@@ -126,29 +103,24 @@ void * fru__find_reclist_entry(void * head_ptr, void * prev, size_t index)
 		counter++;
 	}
 
-	if (!rec) {
-		fru_errno = FENOENTRY;
-	}
+	// Errors are handles/registered higher in the call chain
 	return rec;
 }
 
 // See header
 void * fru__add_reclist_entry(void * head_ptr, size_t index)
 {
+	assert(head_ptr);
+
 	fru__genlist_t * rec,
 	               * oldrec,
 	               * prevrec = NULL,
 	               **reclist = (fru__genlist_t **)head_ptr;
 
-	if (!head_ptr) {
-		fru_errno = FEGENERIC;
-		errno = EFAULT;
-		return NULL;
-	}
-
 	rec = (fru__genlist_t *)calloc(1, sizeof(fru__genlist_t));
 	if(!rec) {
-		fru_errno = FEGENERIC;
+		// Location and item are adjusted up the call chain
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		return NULL;
 	}
 
@@ -232,12 +204,15 @@ void fru_wipe(fru_t * fru)
 int16_t fru_hex2byte(const char * hex)
 {
 	if (!hex) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
 		errno = EFAULT;
 		return -1;
 	}
 
-	/* We could use sscanf, but that's about 6 times slower for single-byte conversions */
+	/*
+	 * We could use sscanf, but that's about 6 times slower
+	 * for single-byte conversions
+	 */
 	uint8_t byte = 0;
 	for (size_t i = 0; i < FRU__NIBBLES_IN_BYTE; i++) { // 2 nibbles in a byte
 		char c = hex[i];
@@ -251,11 +226,11 @@ int16_t fru_hex2byte(const char * hex)
 			nibble = c - '0';
 		}
 		else if (c >= 'a' && c <= 'f') {
-				nibble = c - 'a' + 10;
+			nibble = c - 'a' + 10;
 		}
 		else {
-				fru_errno = FENONHEX;
-				return -1;
+			fru__seterr(FENONHEX, FERR_LOC_GENERAL, -1);
+			return -1;
 		}
 
 		if (nibble > 0) {

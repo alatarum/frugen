@@ -7,56 +7,59 @@
 #include <string.h>
 #include "../fru_errno.h"
 
-__thread fru_errno_t fru_errno;
+__thread fru_errno_t fru_errno = { FENONE, FERR_LOC_GENERAL, -1 };
 
-static const char * fru_errno_string[FETOTALCOUNT] = {
+static const char * const fru_errno_string[FETOTALCOUNT] = {
     [FENONE]                = "No libfru error",
     [FEGENERIC]             = "Generic error, check errno",
-    [FELONGINPUT]           = "Input string is too long",
+    [FEINIT]                = "Uninitialized FRU structure",
     [FENONPRINT]            = "Field data contains non-printable bytes",
     [FENONHEX]              = "Input string contains non-hex characters",
     [FERANGE]               = "Field data exceeds range for the requested encoding",
-    [FENOTEVEN]             = "Input string must contain an even number of nibbles for binary encoding",
+    [FENOTEVEN]             = "Not an even number of nibbles",
     [FEAUTOENC]             = "Unable to auto-detect encoding",
     [FEBADENC]              = "Invalid encoding for a field",
-    [FETOOSMALL]            = "FRU file is too small",
-    [FETOOBIG]              = "FRU file is too big",
-    [FEHDRVER]              = "FRU header has bad version",
-    [FEHDRCKSUM]            = "FRU header has wrong checksum",
-    [FEHDRBADPTR]           = "FRU header points to an area beyond the end of file",
-    [FEAREADUP]             = "Area has already been processed (invalid order)",
-    [FEAREANOTSUP]          = "Area type not supported",
-    [FEAREABADTYPE]         = "Invalid area type",
-    [FEAREAVER]             = "Invalid area version",
-    [FEAREACKSUM]           = "Invalid area checksum",
-    [FEAREANOEOF]           = "Area doesn't have an end-of-fields marker",
+    [FE2SMALL]              = "File or buffer is too small",
+    [FE2BIG]                = "Data, file, or buffer is too big",
+    [FESIZE]                = "Data size mismatch",
+    [FEHDRVER]              = "Bad header version",
+    [FEHDRCKSUM]            = "Bad header checksum",
+    [FEHDRBADPTR]           = "Area pointer beyond the end of file/buffer",
+    [FEDATACKSUM]           = "Bad data checksum",
+    [FEAREADUP]             = "Duplicate area in area order",
+    [FEAREANOTSUP]          = "Unsupported area type", /* For a particular operation */
+    [FEAREABADTYPE]         = "Bad area type", /* A completely wrong value */
+    [FENOTERM]              = "Unterminated area",
     [FEBDATE]               = "Board manufacturing date is out of range",
     [FENOFIELD]             = "No such field",
-    [FEMRNOREC]             = "No such record in MR area",
-    [FEMRNODATA]            = "MR Record is empty",
-    [FEMRVER]               = "MR Record has bad version",
-    [FEMRHCKSUM]            = "MR Record has wrong header checksum",
-    [FEMRDCKSUM]            = "MR Record has wrong data checksum",
-    [FEMRDSIZE]             = "Too many data to fit into an MR Record",
-    [FEMRMGMTRANGE]         = "MR Management Record type is out of range",
-    [FEMRMGMTSIZE]          = "MR Management Record has wrong size",
-    [FEMRMGMTTYPE]          = "MR Management Record is of wrong type",
-    [FEMRNOTSUP]            = "MR Record type is not supported",
-    [FENOENTRY]             = "No such list entry",
+    [FENOREC]               = "No such record",
+    [FEBADDATA]             = "Malformed data",
+    [FENODATA]              = "No data",
+    [FEMRMGMTBAD]           = "Bad management record subtype",
+    [FEMRNOTSUP]            = "Unsupported record type",
     [FEMREND]               = "End of MR records (not an error)",
     [FEAPOS]                = "Invalid area position",
+    [FENOTEMPTY]            = "List is not empty",
     [FEAENABLED]            = "Area is enabled",
-    [FEADISABLED]           = "Area is disabled",
+    [FEADISABLED]           = "Areas is disabled",
+    [FELIB]                 = "Internal library error (bug?)",
 };
 
 const char * fru_strerr(fru_errno_t ferr)
 {
-	if (ferr < FENONE || ferr >= FETOTALCOUNT) {
+	if (ferr.code < FENONE || ferr.code >= FETOTALCOUNT) {
 		return "Undefined libfru error";
 	}
 
-	if (ferr == FEGENERIC)
-		return strerror(ferr);
+	if (ferr.code == FEGENERIC)
+		return strerror(ferr.code);
 
-	return fru_errno_string[ferr];
+	return fru_errno_string[ferr.code];
+}
+
+void fru_clearerr(void)
+{
+	fru_errno.code = FENONE;
+	fru_errno.src = FERR_LOC_GENERAL;
+	fru_errno.index = -1;
 }

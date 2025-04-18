@@ -19,33 +19,35 @@ fru_field_t * fru_get_custom(const fru_t * fru,
 {
 	fru_field_t *field = NULL;
 
+	if (!fru) {
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
+		errno = EFAULT;
+		goto out;
+	}
+
 	if (!FRU_IS_VALID_AREA(atype)) {
-		fru_errno = FEAREABADTYPE;
+		fru__seterr(FEAREABADTYPE, FERR_LOC_CALLER, atype);
 		goto out;
 	}
 
 	if (!FRU_IS_INFO_AREA(atype)) {
-		fru_errno = FEAREANOTSUP;
+		fru__seterr(FEAREANOTSUP, FERR_LOC_CALLER, atype);
 		goto out;
 	}
 
 	if (!fru->present[atype]) {
-		fru_errno = FEADISABLED;
+		fru__seterr(FEADISABLED, atype, -1);
 		goto out;
 	}
 
 	fru__reclist_t ** cust = fru__get_customlist(fru, atype);
 
-	if (!cust) {
-		DEBUG("Custom list is not available for area type %d\n", atype);
-		goto out;
-	}
-
 	fru__reclist_t * entry;
 	entry = fru__find_reclist_entry(cust, NULL, index);
 	if (entry == NULL) {
 		DEBUG("Failed to find reclist entry: %s\n", fru_strerr(fru_errno));
-		fru_errno = FENOFIELD;
+		// Custom fields start at FRU_<atype>_FIELD_COUNT index
+		fru__seterr(FENOFIELD, atype, fru__fieldcount[atype] + index);
 		goto out;
 	}
 

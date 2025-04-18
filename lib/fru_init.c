@@ -29,7 +29,7 @@ fru_t * fru_init(fru_t * fru)
 	}
 
 	if (!fru) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		return NULL;
 	}
 

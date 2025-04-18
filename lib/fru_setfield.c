@@ -67,10 +67,10 @@ bool fru__hexstr2bin(void * out,
 	}
 	DEBUG("Done converting at %p", out + *outsize);
 	if (*outsize && size == *outsize && ptr[0]) {
-		fru_errno = FELONGINPUT;
+		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 	}
 	else if (ptr[0]) {
-		fru_errno = FENOTEVEN;
+		fru__seterr(FENOTEVEN, FERR_LOC_GENERAL, -1);
 		return false;
 	}
 	*outsize = size;
@@ -83,7 +83,7 @@ bool fru__hexstr2bin(void * out,
  * the leading type/length byte.
  *
  * If the input string was truncated to fit, then \ref fru_errno is set
- * to \ref FELONGINPUT. Set \ref fru_errno to 0 before this call to avoid
+ * to \ref FE2BIG. Set \ref fru_errno to 0 before this call to avoid
  * false positive checks for input truncation.
  *
  * If \a out is NULL, then the function just validates the input string.
@@ -122,7 +122,7 @@ bool encode_binary(fru__file_field_t * out,
  * the leading type/length byte.
  *
  * If the input string was truncated to fit, then \ref fru_errno is set
- * to \ref FELONGINPUT. Set \ref fru_errno to 0 before this call to avoid
+ * to \ref FE2BIG. Set \ref fru_errno to 0 before this call to avoid
  * false positive checks for input truncation.
  *
  * If \a out is NULL, then the function just validates the input string.
@@ -144,7 +144,7 @@ bool encode_6bit(fru__file_field_t * out,
 	size_t i, i6;
 
 	if (len6bit > FRU__FIELDLEN(len6bit)) {
-		fru_errno = FELONGINPUT;
+		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 		len6bit = FRU__FIELDLEN(len6bit); // Truncate to fit
 	}
 
@@ -154,7 +154,7 @@ bool encode_6bit(fru__file_field_t * out,
 		char c = (s[i] - FRU__6BIT_BASE);
 
 		if (c > FRU__6BIT_MAXVALUE) {
-			fru_errno = FERANGE;
+			fru__seterr(FERANGE, FERR_LOC_GENERAL, -1);
 			return false;
 		}
 
@@ -190,7 +190,7 @@ bool encode_6bit(fru__file_field_t * out,
  * the leading type/length byte.
  *
  * If the input string was truncated to fit, then \ref fru_errno is set
- * to \ref FELONGINPUT. Set \ref fru_errno to 0 before this call to avoid
+ * to \ref FE2BIG. Set \ref fru_errno to 0 before this call to avoid
  * false positive checks for input truncation.
  *
  * If \a out is NULL, then the function just validates the input string.
@@ -214,7 +214,7 @@ bool encode_bcdplus(fru__file_field_t * out,
 
 	if (lenbcd > FRU__FIELDLEN(lenbcd))
 	{
-		fru_errno = FELONGINPUT;
+		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 		lenbcd = FRU__FIELDLEN(lenbcd); // Truncate to fit
 	}
 
@@ -235,7 +235,7 @@ bool encode_bcdplus(fru__file_field_t * out,
 				break;
 			default: // Digits
 				if (!isdigit(s[i])) {
-					fru_errno = FERANGE;
+					fru__seterr(FERANGE, FERR_LOC_GENERAL, -1);
 					return false;
 			    }
 				c[i % 2] = s[i] - '0';
@@ -256,7 +256,7 @@ bool encode_bcdplus(fru__file_field_t * out,
  * the leading type/length byte.
  *
  * If the input string was truncated to fit, then \ref fru_errno is set
- * to \ref FELONGINPUT. Set \ref fru_errno to 0 before this call to avoid
+ * to \ref FE2BIG. Set \ref fru_errno to 0 before this call to avoid
  * false positive checks for input truncation.
  *
  * If \a out is NULL, then the function just validates the input string.
@@ -275,9 +275,9 @@ bool encode_text(fru__file_field_t * out,
 {
 	size_t len = strlen(s);
 
-	fru_errno = FERANGE;
+	fru_clearerr();
 	if (len > FRU__FIELDLEN(len)) {
-		fru_errno = FELONGINPUT;
+		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 		len = FRU__FIELDLEN(len); // Truncate to fit
 	}
 
@@ -292,7 +292,7 @@ bool encode_text(fru__file_field_t * out,
 		// unless it's a single-byte string
 		for (size_t i = 0; i < FRU__FIELDLEN(out->typelen); i++) {
 			if (!isprint(s[i])) {
-				fru_errno = FENONPRINT;
+				fru__seterr(FENONPRINT, FERR_LOC_GENERAL, -1);
 				return false;
 			}
 			out->data[i] = s[i];
@@ -329,7 +329,7 @@ bool fru__encode_field(fru__file_field_t * out_field,
 	};
 
 	if (!s) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		errno = EFAULT;
 		goto out;
 	}
@@ -339,7 +339,7 @@ bool fru__encode_field(fru__file_field_t * out_field,
 		encoding = FRU_FE_TEXT;
 	}
 	else if (FRU_FE_AUTO != encoding && !FRU_FE_IS_REAL(encoding)) {
-		fru_errno = FEBADENC;
+		fru__seterr(FEBADENC, FERR_LOC_GENERAL, 0);
 		goto out;
 	}
 	DEBUG("Going to start with encoding %d", encoding);
@@ -371,7 +371,7 @@ bool fru__encode_field(fru__file_field_t * out_field,
 			}
 
 			if (i >= FRU_FE_REALCOUNT) {
-				fru_errno = FEAUTOENC;
+				fru__seterr(FEAUTOENC, FERR_LOC_GENERAL, 0);
 				goto out;
 			}
 		}

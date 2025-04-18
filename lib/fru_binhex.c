@@ -6,6 +6,8 @@
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
+#include <assert.h>
+
 #include "fru-private.h"
 
 /**
@@ -29,7 +31,7 @@ void fru__byte2hex(void *buf, char byte)
 }
 
 // See fru-private.h
-bool fru__decode_raw_binary(const void *in,
+void fru__decode_raw_binary(const void *in,
                             size_t in_len,
                             char *out,
                             size_t out_len)
@@ -37,15 +39,11 @@ bool fru__decode_raw_binary(const void *in,
 	size_t i;
 	const char *buffer = in;
 
-	if (in_len * 2 + 1 > out_len) {
-		return false;
-	}
+	assert(in_len * 2 + 1 <= out_len);
 
 	/* byte2hex() automatically terminates the string */
 	for (i = 0; i < in_len; i++) {
 		fru__byte2hex(out + 2 * i, buffer[i]);
 	}
-
-	return true;
 }
 

@@ -19,7 +19,7 @@
 fru_mr_rec_t * fru_add_mr(fru_t * fru, size_t index, fru_mr_rec_t * rec)
 {
 	if (!fru) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
 		errno = EFAULT;
 		return NULL;
 	}
@@ -29,6 +29,8 @@ fru_mr_rec_t * fru_add_mr(fru_t * fru, size_t index, fru_mr_rec_t * rec)
 
 	mr_reclist_tail = fru__add_reclist_entry(mr_reclist_head, index);
 	if (!mr_reclist_tail) {
+		fru__seterr(FEGENERIC, FERR_LOC_MR, index);
+		DEBUG("Failed to allocate MR reclist entry: %s\n", fru_strerr(fru_errno));
 		return NULL;
 	}
 
@@ -40,7 +42,7 @@ fru_mr_rec_t * fru_add_mr(fru_t * fru, size_t index, fru_mr_rec_t * rec)
 	 */
 	fru_mr_rec_t *newrec = calloc(1, sizeof(fru_mr_rec_t));
 	if (!newrec) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_MR, index);
 		errno = EFAULT;
 	}
 	newrec->type = FRU_MR_EMPTY;

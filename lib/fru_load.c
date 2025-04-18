@@ -43,7 +43,7 @@ static
 fru__file_t * find_fru_header(const void * buffer, size_t size, fru_flags_t flags) {
 	int cksum;
 	if (size < FRU__BLOCK_SZ) {
-		fru_errno = FETOOSMALL;
+		fru__seterr(FE2SMALL, FERR_LOC_GENERAL, -1);
 		return NULL;
 	}
 	fru__file_t *header = (fru__file_t *) buffer;
@@ -51,7 +51,7 @@ fru__file_t * find_fru_header(const void * buffer, size_t size, fru_flags_t flag
 	    || (header->rsvd != 0)
 	    || (header->pad != 0))
 	{
-		fru_errno = FEHDRVER;
+		fru__seterr(FEHDRVER, FERR_LOC_GENERAL, -1);
 		if (!(flags & FRU_IGNFVER))
 			return NULL;
 	}
@@ -59,7 +59,7 @@ fru__file_t * find_fru_header(const void * buffer, size_t size, fru_flags_t flag
 	cksum = fru__calc_checksum(header, sizeof(fru__file_t) - 1);
 	if (cksum < 0 || header->hchecksum != (uint8_t)cksum) {
 		if (cksum >= 0) // Keep fru_errno if there was an error
-			fru_errno = FEHDRCKSUM;
+			fru__seterr(FEHDRCKSUM, FERR_LOC_GENERAL, -1);
 		if (!(flags & FRU_IGNFHCKSUM))
 			return NULL;
 	}
@@ -92,7 +92,7 @@ size_t get_area_limit(void *fru_file, size_t size, fru_area_type_t type)
 	DEBUG("Detecting area limit for area %d within %zu bytes of FRU", type, size);
 
 	if (!fru_file) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, type, -1);
 		errno = EFAULT;
 		return 0;
 	}
@@ -124,7 +124,7 @@ size_t get_area_limit(void *fru_file, size_t size, fru_area_type_t type)
 
 	/* An area must be at least 1 byte long */
 	if (area_offset + 1 > size) {
-		fru_errno = FETOOSMALL;
+		fru__seterr(FE2SMALL, type, -1);
 		return 0;
 	}
 
@@ -158,6 +158,7 @@ bool decode_custom_fields(fru_t * fru,
                           fru_flags_t flags)
 {
 	fru__file_field_t *field = NULL; /* A pointer to an _encoded_ field */
+	size_t index = 0;
 
 	DEBUG("Decoding custom fields in %d bytes", limit);
 	while (limit > 0) {
@@ -169,11 +170,15 @@ bool decode_custom_fields(fru_t * fru,
 			break;
 		}
 		if (!fru__decode_field(&outfield, field)) {
+			fru_errno_t err = fru_errno;
+			err.src = (fru_error_source_t)atype;
+			err.index = index;
 			DEBUG("Failed to decode custom field: %s",
 			      fru_strerr(fru_errno));
 			fru__reclist_t **cust = fru__get_customlist(fru, atype);
 			if (cust)
 				fru__free_reclist(cust);
+			fru_errno = err;
 			return false;
 		}
 		fru_add_custom(fru, atype, FRU_LIST_TAIL,
@@ -184,12 +189,14 @@ bool decode_custom_fields(fru_t * fru,
 
 		data += length;
 		limit -= length;
+		index++;
 	}
 
-	if (limit <= 0 && !(flags & FRU_IGNAEOF)) {
+	if (limit <= 0) {
 		DEBUG("Area doesn't contain an end-of-fields byte");
-		fru_errno = FEAREANOEOF;
-		return false;
+		fru__seterr(FENOTERM, atype, -1);
+		if(!(flags & FRU_IGNAEOF))
+			return false;
 	}
 
 	DEBUG("Done decoding custom fields");
@@ -218,8 +225,8 @@ bool decode_iu_area(fru_t * fru,
 	data_size -= sizeof(iu_area->ver); // Only the data counts
 
 	if (iu_area->ver != FRU__VER) {
-		fru_errno = FEAREAVER;
-		if(!(flags & FRU_IGNRVER))
+		fru__seterr(FEHDRVER, FERR_LOC_INTERNAL, -1);
+		if(!(flags & FRU_IGNAVER))
 			return false;
 	}
 
@@ -257,31 +264,31 @@ bool decode_info_area(fru_t * fru,
 
 	if (!fru || !data_in) {
 		errno = EFAULT;
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, atype, -1);
 		return false;
 	}
 
 	/* An area must at least contain a header */
 	if (data_size < FRU__INFO_AREA_HEADER_SZ) {
-		fru_errno = FETOOSMALL;
+		fru__seterr(FE2SMALL, atype, -1);
 		return false;
 	}
 
 	/* Now check if there is there is enough data for what's
 	 * specified in the area header */
 	if (data_size < (size_t)bytes_left) {
-		fru_errno = FEHDRBADPTR;
+		fru__seterr(FEHDRBADPTR, atype, -1);
 		return false;
 	}
 
 	/* Verify checksum, don't include the checksum byte itself */
 	cksum = fru__calc_checksum((uint8_t *)file_area, bytes_left);
 	if (cksum < 0) {
-		if (fru_errno == FEGENERIC)
-			return false;
+		fru_errno.src = (fru_error_source_t)atype;
+		return false;
 	}
 	else if (cksum) {
-		fru_errno = FEAREACKSUM;
+		fru__seterr(FEDATACKSUM, atype, -1);
 		if (!(flags & FRU_IGNACKSUM))
 			return false;
 	}
@@ -324,7 +331,7 @@ bool decode_info_area(fru_t * fru,
 
 	if (file_area->ver != FRU__VER) {
 		DEBUG("Wrong area version %d for area %d", (int)file_area->ver, atype);
-		fru_errno = FEAREAVER;
+		fru__seterr(FEHDRVER, atype, -1);
 		if (!(flags & FRU_IGNAVER))
 			return false;
 	}
@@ -371,14 +378,17 @@ bool decode_info_area(fru_t * fru,
 			}
 			break;
 		default:
-			fru_errno = FEAREANOTSUP;
+			fru__seterr(FEAREANOTSUP, FERR_LOC_GENERAL, atype);
 			DEBUG("Attempt to decode unsupported area type (%d)", atype);
 			return false;
 	}
 
 	for (size_t i = 0; i < field_count[atype]; i++) {
-		if (!fru__decode_field(out_field[atype][i], field))
+		if (!fru__decode_field(out_field[atype][i], field)) {
+			fru_errno.src = (fru_error_source_t)atype;
+			fru_errno.index = i;
 			return false;
+		}
 
 		bytes_left -= FRU__FIELDSIZE(field->typelen);
 		field = (void *)field + FRU__FIELDSIZE(field->typelen);
@@ -398,7 +408,7 @@ bool is_mr_rec_valid(const fru__file_mr_rec_t * rec, size_t limit, fru_flags_t f
 
 	/* The record must have some data to be valid */
 	if (!rec || limit <= sizeof(fru__file_mr_rec_t)) {
-		fru_errno = FEMRNODATA;
+		fru__seterr(FENODATA, FERR_LOC_MR, -1);
 		return false;
 	}
 
@@ -407,7 +417,7 @@ bool is_mr_rec_valid(const fru__file_mr_rec_t * rec, size_t limit, fru_flags_t f
 	 * version, as well as valid checksums
 	 */
 	if (!FRU__IS_MR_VALID_VER(rec)) {
-		fru_errno = FEMRVER;
+		fru__seterr(FEHDRVER, FERR_LOC_MR, -1);
 		if (!(flags & FRU_IGNRVER))
 			return false;
 	}
@@ -415,13 +425,13 @@ bool is_mr_rec_valid(const fru__file_mr_rec_t * rec, size_t limit, fru_flags_t f
 	/* Check the header checksum, checksum byte included into header */
 	cksum = fru__calc_checksum(rec, sizeof(fru__file_mr_header_t));
 	if (cksum) {
-		fru_errno = FEMRHCKSUM;
+		fru__seterr(FEHDRCKSUM, FERR_LOC_MR, -1);
 		if (!(flags & FRU_IGNRHCKSUM))
 			return false;
 	}
 
 	if (FRU__MR_REC_SZ(rec) > limit) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_MR, -1);
 		errno = ENOBUFS;
 		return false;
 	}
@@ -429,7 +439,7 @@ bool is_mr_rec_valid(const fru__file_mr_rec_t * rec, size_t limit, fru_flags_t f
 	/* Check the data checksum, checksum byte not included into data */
 	cksum = fru__calc_checksum(rec->data, rec->hdr.len);
 	if (cksum != (int)rec->hdr.rec_checksum) {
-		fru_errno = FEMRDCKSUM;
+		fru__seterr(FEDATACKSUM, FERR_LOC_MR, -1);
 		if (!(flags & FRU_IGNRDCKSUM))
 			return false;
 	}
@@ -447,20 +457,10 @@ bool decode_mr_mgmt_uuid(fru_mr_rec_t * rec,
 	size_t i;
 	fru__uuid_t uuid;
 
-	if (!file_rec || !rec) {
-		fru_errno = FEGENERIC;
-		errno = EFAULT;
-		return false;
-	}
-
 	/* Is this really a Management System UUID record? */
-	if (FRU_MR_MGMT_ACCESS != file_rec->hdr.type_id
-	    || !FRU__IS_MR_VALID_VER(file_rec)
-	    || FRU__MGMT_MR_DATASIZE(FRU__UUID_SIZE) != file_rec->hdr.len
-	    || FRU_MR_MGMT_SYS_UUID != file_rec->subtype)
+	if (FRU__MGMT_MR_DATASIZE(FRU__UUID_SIZE) != file_rec->hdr.len)
 	{
-		fru_errno = FEGENERIC;
-		errno = EINVAL;
+		fru__seterr(FEBADDATA, FERR_LOC_MR, -1);
 		return false;
 	}
 
@@ -492,28 +492,20 @@ bool decode_mr_mgmt(fru_mr_rec_t * rec,
 	size_t minsize, maxsize;
 	const fru__file_mr_mgmt_rec_t *file_rec = data;
 
-	if (!file_rec || !rec) {
-		fru_errno = FEGENERIC;
-		errno = EFAULT;
-		return false;
-	}
-
-	/* Is this a valid Management Access record? */
-	if (!FRU__IS_MR_VALID_VER(file_rec) && !(flags & FRU_IGNMRVER)) {
-		fru_errno = FEMRVER;
-		return false;
-	}
-
 	if (!FRU_MR_MGMT_IS_SUBTYPE_VALID(file_rec->subtype)) {
-		fru_errno = FEMRMGMTTYPE;
+		fru__seterr(FEMRMGMTBAD, FERR_LOC_MR, -1);
 		return false;
 	}
 
-	/* Is the management record data size valid? */
+	/* Check if the management record data size is valid */
 	minsize = fru__mr_mgmt_minlen[FRU_MR_MGMT_SUBTYPE_TO_IDX(file_rec->subtype)];
+	minsize = FRU__MGMT_MR_DATASIZE(minsize);
+
 	maxsize = fru__mr_mgmt_maxlen[FRU_MR_MGMT_SUBTYPE_TO_IDX(file_rec->subtype)];
-	if (minsize > file_rec->hdr.len || file_rec->hdr.len > FRU__MGMT_MR_DATASIZE(maxsize)) {
-		fru_errno = FEMRMGMTSIZE;
+	maxsize = FRU__MGMT_MR_DATASIZE(maxsize);
+
+	if (minsize > file_rec->hdr.len || file_rec->hdr.len > maxsize) {
+		fru__seterr(FESIZE, FERR_LOC_MR, -1);
 		if (!(flags & FRU_IGNMRDATALEN))
 			return false;
 	}
@@ -537,21 +529,9 @@ bool decode_mr_mgmt(fru_mr_rec_t * rec,
 static
 bool decode_mr_raw(fru_mr_rec_t * rec,
                    const void * data,
-                   fru_flags_t flags)
+                   fru_flags_t flags __attribute__((__unused__)))
 {
 	const fru__file_mr_rec_t *file_rec = data;
-
-	if (!file_rec || !rec) {
-		fru_errno = FEGENERIC;
-		errno = EFAULT;
-		return false;
-	}
-
-	/* Is this a valid Management Access record? */
-	if (!FRU__IS_MR_VALID_VER(file_rec) && !(flags & FRU_IGNMRVER)) {
-		fru_errno = FEMRVER;
-		return false;
-	}
 
 	rec->type = FRU_MR_RAW;
 	rec->raw.type = file_rec->hdr.type_id;
@@ -568,11 +548,9 @@ bool decode_mr_raw(fru_mr_rec_t * rec,
 		memcpy(rec->raw.data, file_rec->data, maxsize);
 		rec->raw.data[maxsize] = 0; // Terminate the string
 	}
-	else if (!fru__decode_raw_binary(file_rec->data, file_rec->hdr.len,
-	                                 rec->raw.data, FRU_MRR_RAW_MAXDATA - 1))
-	{
-		fru_errno = FEMRDSIZE; // If this happends, it's a bug in this library
-		return false;
+	else {
+		fru__decode_raw_binary(file_rec->data, file_rec->hdr.len,
+		                       rec->raw.data, FRU_MRR_RAW_MAXDATA - 1);
 	}
 
 	return true;
@@ -584,7 +562,7 @@ bool decode_mr_record(fru_mr_rec_t * rec,
                       fru_flags_t flags)
 {
 	bool rc = false;
-	fru_errno = FEMRNOTSUP;
+	fru__seterr(FEMRNOTSUP, FERR_LOC_MR, -1);
 
 	size_t type_id = srec->hdr.type_id;
 	bool (* decode_rec[FRU_MR_TYPE_COUNT])(fru_mr_rec_t *,
@@ -626,27 +604,21 @@ bool decode_mr_area(fru_t * fru,
 	fru__mr_reclist_t ** reclist = NULL;
 	size_t total = 0;
 	int count = -1;
-	int err = 0;
 	bool rc = false;
 
-	fru_errno = FENONE;
-
-	if (!fru) {
-		fru_errno = FEGENERIC;
-		err = EFAULT;
-		goto out;
-	}
+	fru_clearerr();
 
 	reclist = (fru__mr_reclist_t **)&fru->mr;
 	if (*reclist) {
 		/* The code below expects an empty reclist */
-		fru_errno = FEMRNOTEMPTY;
+		fru__seterr(FENOTEMPTY, FERR_LOC_MR, -1);
 		goto out;
 	}
 
 	while (srec) {
 		size_t rec_sz = FRU__MR_REC_SZ(srec);
 		if (!is_mr_rec_valid(srec, limit - total, flags)) {
+			fru_errno.index = count;
 			if (!(flags & FRU_IGNRNOEOL))
 				count = -1;
 			break;
@@ -660,6 +632,7 @@ bool decode_mr_area(fru_t * fru,
 		}
 
 		if (!decode_mr_record(rec, srec, flags)) {
+			fru_errno.index = count;
 			count = -1;
 			break;
 		}
@@ -682,9 +655,6 @@ out:
 		if (*reclist) {
 			fru__free_reclist(reclist);
 			*reclist = NULL;
-		}
-		if (fru_errno == FEGENERIC) {
-			errno = err;
 		}
 	}
 
@@ -744,7 +714,8 @@ fru_t * fru_loadbuffer(fru_t * init_fru,
 	};
 
 	if (!buf) {
-		fru_errno = EFAULT;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
+		errno = EFAULT;
 		goto out;
 	}
 
@@ -756,7 +727,7 @@ fru_t * fru_loadbuffer(fru_t * init_fru,
 	if (!init_fru) {
 		fru = calloc(1, sizeof(fru_t));
 		if (!fru) {
-			fru_errno = FEGENERIC;
+			fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 			goto out;
 		}
 	}
@@ -832,7 +803,7 @@ fru_t * fru_loadfile(fru_t * init_fru,
 	void * buffer;
 
 	if (!filename) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		errno = EFAULT;
 		goto out;
 	}
@@ -840,25 +811,24 @@ fru_t * fru_loadfile(fru_t * init_fru,
 	fd = open(filename, O_RDONLY);
 	DEBUG("open() == %d", fd);
 	if (fd < 0) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		goto out;
 	}
 
 	struct stat statbuf = {0};
 	if (fstat(fd, &statbuf)) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		goto err;
 	}
 	DEBUG("st_size == %zd", statbuf.st_size);
 	if (statbuf.st_size > FRU__MAX_FILE_SIZE && !(flags & FRU_IGNBIG)) {
-		fru_errno = FETOOBIG;
+		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 		goto err;
 	}
 
 	buffer = mmap(NULL, statbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 	if (buffer == MAP_FAILED) {
-		close(fd);
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		goto err;
 	}
 	DEBUG("loading into buffer @ %p", buffer);
@@ -866,7 +836,9 @@ fru_t * fru_loadfile(fru_t * init_fru,
 	munmap(buffer, statbuf.st_size);
 
 err:
+	int err = errno; // Preserve
 	close(fd);
+	errno = err;
 
 out:
 	return fru;

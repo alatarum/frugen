@@ -30,26 +30,22 @@ fru_mr_rec_t * mr_operation(fru_t * fru,
                             size_t * index)
 {
 	if (!fru) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
 		errno = EFAULT;
 		return NULL;
 	}
 
 	if (!fru->present[FRU_MR]) {
-		fru_errno = FEADISABLED;
+		fru__seterr(FEADISABLED, FERR_LOC_CALLER, -1);
 		return NULL;
 	}
 
-	if (type < FRU_MR_ANY || FRU_MR_TYPE_COUNT < type) {
-		fru_errno = FEMRNOTSUP;
-		return NULL;
-	}
-
-	/* If 'ANY' type is requested, then we will search for
-	 * the record at the given index, which must be valid */
-	if (type == FRU_MR_ANY && !index) {
-		fru_errno = FEGENERIC;
-		errno = EINVAL;
+	// This is wider than FRU_MR_IS_VALID_TYPE()
+	if (!FRU_MR_IS_VALID_TYPE(type)
+	    && FRU_MR_RAW != type
+	    && FRU_MR_ANY != type)
+	{
+		fru__seterr(FEMRNOTSUP, FERR_LOC_CALLER, *index);
 		return NULL;
 	}
 
@@ -59,12 +55,13 @@ fru_mr_rec_t * mr_operation(fru_t * fru,
 	size_t start_index = index ? *index : 0;
 
 	while (entry) {
+		/* If 'ANY' type is requested, then we search for the record at the given index */
 		if ((type == FRU_MR_ANY && count == *index)
 			|| (count >= start_index && type == entry->rec->type))
 		{
 			/* The found entry is last, indicate that to the caller */
 			if (!entry->next)
-				fru_errno = FEMREND;
+				fru__seterr(FEMREND, FERR_LOC_MR, count);
 
 			/* We've found the record, now see what to do with it */
 			switch (op) {
@@ -108,7 +105,7 @@ fru_mr_rec_t * mr_operation(fru_t * fru,
 		count++;
 	}
 
-	fru_errno = FEMRNOREC;
+	fru__seterr(FENOREC, FERR_LOC_MR, *index);
 	return NULL;
 }
 

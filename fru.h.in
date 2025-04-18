@@ -1101,8 +1101,6 @@ bool fru_savefile(const char * fname, const fru_t * fru);
  * The \p NVME_* types are per NVME-MI Spec rev 1.2b, section 8.2.
  */
 typedef enum {
-	FRU_MR_ANY = -2, /**< Any MR Record type, for use with fru_find_mr() only */
-	FRU_MR_EMPTY = -1, /**< MR Record is empty, will be skipped during saving */
 	FRU_MR_MIN = 0x00, /**< The minimum valid MR record type that can be saved */
 	FRU_MR_PSU_INFO = 0x00, /**< PSU Information */
 	FRU_MR_DC_OUT = 0x01, /**< DC Output */
@@ -1128,7 +1126,9 @@ typedef enum {
 	FRU_MR_OEM_END = 0xFF, /**< End of OEM range */
 	FRU_MR_MAX = FRU_MR_OEM_END, /**< The maximum valid MR record type that can be saved */
 	FRU_MR_RAW, /**< The `raw` type. Any of the above types that aren't yet directly supported */
-	FRU_MR_TYPE_COUNT /**< Total number of MR record types */
+	FRU_MR_TYPE_COUNT, /**< Total number of MR record types (including 'raw') */
+	FRU_MR_ANY, /**< Any MR Record type, for use with fru_find_mr() only */
+	FRU_MR_EMPTY, /**< MR Record is empty, will be skipped during saving */
 } fru_mr_type_t;
 
 /** The FRU_MR_RAW is not considered a valid type, must be checked separately */

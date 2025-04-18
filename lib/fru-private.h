@@ -52,6 +52,12 @@
 #define DEBUG(f, args...)
 #endif
 
+#define fru__seterr(err, where, idx) do { \
+	fru_errno.code = err; \
+	fru_errno.src = (fru_error_source_t)where; \
+	fru_errno.index = idx; \
+} while(0)
+
 /*
  * Binary FRU file related definitions
  */
@@ -185,7 +191,14 @@ extern const size_t fru__mr_mgmt_minlen[FRU_MR_MGMT_MAX];
 extern const size_t fru__mr_mgmt_maxlen[FRU_MR_MGMT_MAX];
 /* A convenience macro to make indices into the above arrays from subtype NAMES */
 #define FRU__MGMT_TYPENAME_ID(name) FRU_MR_MGMT_SUBTYPE_TO_IDX(FRU_MR_MGMT_##name)
-#define FRU__MGMT_MR_DATASIZE(mgmt_size) ((mgmt_size) + sizeof(((fru__file_mr_mgmt_rec_t *)NULL)->subtype))
+
+/*
+ * Convert management access record data size into a pure MR record data size.
+ * We convert this way and not the other way round to avoid getting (size_t)(-1)
+ * when mr_size is 0
+ */
+#define FRU__MGMT_MR_DATASIZE(mgmt_size) \
+	(sizeof(((fru__file_mr_mgmt_rec_t *)NULL)->subtype) + (mgmt_size))
 
 /// Table 18-1, Power Supply Information
 typedef struct {
@@ -295,6 +308,9 @@ typedef union __attribute__((packed)) {
 #define FRU__BYTES(blocks) ((size_t)((blocks) * FRU__BLOCK_SZ))
 #define FRU__BLOCKS(bytes)  (((bytes) + FRU__BLOCK_SZ - 1) / FRU__BLOCK_SZ)
 #define FRU__BLOCK_ALIGN(size) FRU__BYTES(FRU__BLOCKS(size))
+
+/** Numbers of standard string fields per info area */
+extern const size_t fru__fieldcount[FRU_TOTAL_AREAS];
 
 /**
  * Calculate checksum for an arbitrary block of bytes
@@ -425,10 +441,8 @@ time_t fru__datetime_base(void);
  * @param[in] in_len Length of the input data.
  * @param[out] out Buffer to decode into.
  * @param[in] out_len Length of output buffer.
- * @retval true Success.
- * @retval false Failure.
  */
-bool fru__decode_raw_binary(const void * in, size_t in_len, char * out, size_t out_len);
+void fru__decode_raw_binary(const void * in, size_t in_len, char * out, size_t out_len);
 
 /**
  * Decode data from an encoded buffer into a decoded buffer.

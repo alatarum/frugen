@@ -45,7 +45,7 @@ bool mr_blob2rec(fru__file_mr_rec_t * rec,
 	fru__file_mr_rec_t * local_rec = (fru__file_mr_rec_t *)mr_blob;
 
 	if (len > FRU__FILE_MRR_MAXDATA) {
-		fru_errno = FEMRDSIZE;
+		fru__seterr(FE2BIG, FERR_LOC_MR, -1);
 		return false;
 	}
 
@@ -58,6 +58,7 @@ bool mr_blob2rec(fru__file_mr_rec_t * rec,
 	// Checksum the data
 	int cksum = fru__calc_checksum(local_rec->data, len);
 	if (cksum < 0) {
+		fru_errno.src = (fru_error_source_t)FERR_LOC_MR;
 		return false;
 	}
 	local_rec->hdr.rec_checksum = (uint8_t)cksum;
@@ -84,16 +85,11 @@ bool mgmt_blob2rec(fru__file_mr_rec_t * rec,
 	uint8_t mgmt_blob[sizeof(fru__file_mr_mgmt_rec_t) + FRU__FILE_MR_MGMT_MAXDATA] = {};
 	fru__file_mr_mgmt_rec_t * local_rec = (fru__file_mr_mgmt_rec_t *)mgmt_blob;
 
-	if (subtype < FRU_MR_MGMT_MIN || subtype > FRU_MR_MGMT_MAX) {
-		fru_errno = FEMRMGMTRANGE;
-		return false;
-	}
-
 	min = fru__mr_mgmt_minlen[FRU_MR_MGMT_SUBTYPE_TO_IDX(subtype)];
 	max = fru__mr_mgmt_maxlen[FRU_MR_MGMT_SUBTYPE_TO_IDX(subtype)];
 
 	if (min > len || len > max || len > FRU__FILE_MR_MGMT_MAXDATA) {
-		fru_errno =  FEMRMGMTSIZE;
+		fru__seterr(FESIZE, FERR_LOC_MR, -1);
 		return false;
 	}
 
@@ -127,8 +123,7 @@ bool uuid2rec(fru__file_mr_rec_t * rec, size_t * size, const char * str)
 
 	if(FRU__UUID_STRLEN_DASHED != len && FRU__UUID_STRLEN_NONDASHED != len) {
 		DEBUG("Invalid UUID string length\n");
-		fru_errno = FEGENERIC;
-		errno = EINVAL;
+		fru__seterr(FESIZE, FERR_LOC_MR, -1);
 		return false;
 	}
 
@@ -160,14 +155,22 @@ bool uuid2rec(fru__file_mr_rec_t * rec, size_t * size, const char * str)
 static
 bool encode_mr_mgmt_record(void * outbuf, size_t * size, fru_mr_rec_t * rec)
 {
+	assert(rec);
+
+	fru_mr_mgmt_type_t subtype = rec->mgmt.subtype;
+	if (!FRU_MR_MGMT_IS_SUBTYPE_VALID(subtype)) {
+		fru__seterr(FEMRMGMTBAD, FERR_LOC_MR, -1);
+		return false;
+	}
+
 	/* System GUID (UUID) record needs special treatment */
-	if (FRU_MR_MGMT_SYS_UUID == rec->mgmt.subtype) {
+	if (FRU_MR_MGMT_SYS_UUID == subtype) {
 		return uuid2rec(outbuf, size, rec->mgmt.data);
 	}
 
 	/* All other records are just plain text */
 	return mgmt_blob2rec(outbuf, size, rec->mgmt.data,
-	                     strlen(rec->mgmt.data), rec->mgmt.subtype);
+	                     strlen(rec->mgmt.data), subtype);
 }
 
 static
@@ -228,7 +231,7 @@ bool encode_mr_record(void * outbuf, size_t * size, fru_mr_rec_t * rec, bool las
 
 	if (!encode_rec[rec->type]) {
 		DEBUG("MR Record type 0x%02X is not supported yet\n", rec->type);
-		fru_errno = FEMRNOTSUP;
+		fru__seterr(FEMRNOTSUP, FERR_LOC_MR, -1);
 		return false;
 	}
 
@@ -272,6 +275,7 @@ bool encode_iu_area(void * area_out, size_t * size,
 
 	if (internal) {
 		if (!fru__hexstr2bin(internal->data, &bytesize, FRU__HEX_RELAXED, fru->internal)) {
+			fru_errno.src = (fru_error_source_t)FERR_LOC_INTERNAL;
 			return false;
 		}
 		internal->ver = FRU__VER;
@@ -279,6 +283,7 @@ bool encode_iu_area(void * area_out, size_t * size,
 	else {
 		/* Just calculate the size */
 		if(!fru__hexstr2bin(NULL, &bytesize, FRU__HEX_RELAXED, fru->internal)) {
+			fru_errno.src = (fru_error_source_t)FERR_LOC_INTERNAL;
 			return false;
 		}
 	}
@@ -286,29 +291,24 @@ bool encode_iu_area(void * area_out, size_t * size,
 	return true;
 }
 
-static bool add_field_to_area(void * area_out,
-                              size_t * offset,
-                              const fru_field_t * in_field)
+static
+bool add_field_to_area(void * area_out,
+                       size_t * offset,
+                       const fru_field_t * in_field)
 {
 	uint8_t buf[FRU__FILE_FIELD_MAXSIZE];
 	fru__file_field_t * local_outfield = (fru__file_field_t *)buf;
 
-	fru_errno = 0;
+	fru_clearerr();
 	if (!fru__encode_field(local_outfield,
-		                   in_field->enc,
-		                   in_field->val))
+	                       in_field->enc,
+	                       in_field->val))
 	{
 		return false;
 	}
 
 	// Copy the data to the output buffer if any
 	if (area_out) {
-		if (!offset) {
-			fru_errno = FEGENERIC;
-			errno = EFAULT;
-			return false;
-		}
-
 		memcpy(area_out + *offset, local_outfield,
 			   FRU__FIELDSIZE(local_outfield->typelen));
 	}
@@ -332,12 +332,6 @@ bool encode_info_area(void * area_out, size_t * size,
 	size_t bytes = 0; // Counter for the output area size in bytes,
 	                  // don't spoil *size until everything is
 	                  // known to be success
-
-	if (!fru) {
-		errno = EFAULT;
-		fru_errno = FEGENERIC;
-		return false;
-	}
 
 	fru__info_area_t * info[FRU_INFO_AREAS] = {
 		(fru__info_area_t *)&fru->chassis,
@@ -366,11 +360,6 @@ bool encode_info_area(void * area_out, size_t * size,
 			&fru->product.atag,
 			&fru->product.file,
 		}
-	};
-	size_t field_count[FRU_TOTAL_AREAS] = {
-		[FRU_CHASSIS_INFO] = FRU_CHASSIS_FIELD_COUNT,
-		[FRU_BOARD_INFO] = FRU_BOARD_FIELD_COUNT,
-		[FRU_PRODUCT_INFO] = FRU_PROD_FIELD_COUNT,
 	};
 
 	fru__reclist_t * cust_head[FRU_INFO_AREAS] = {
@@ -405,13 +394,13 @@ bool encode_info_area(void * area_out, size_t * size,
 			gettimeofday(&tv_toset, NULL);
 			tv_toset.tv_sec += timezone;
 		} else if (tv_toset.tv_sec < fru_time_base) {
-			fru_errno = FEBDATE;
+			fru__seterr(FEBDATE, FERR_LOC_BOARD, -1);
 			return false;
 		}
 
 		/* Yes, there is an upper limit and it's soon */
 		if (tv_toset.tv_sec > FRU_DATETIME_MAX) {
-			fru_errno = FEBDATE;
+			fru__seterr(FEBDATE, FERR_LOC_BOARD, -1);
 			return false;
 		}
 
@@ -440,18 +429,27 @@ bool encode_info_area(void * area_out, size_t * size,
 	}
 
 	/* Encode mandatory fields */
-	for (size_t i = 0; i < field_count[atype]; i++) {
-		if (!add_field_to_area(area_out, &bytes, in_field[atype][i]))
+	size_t i;
+	for (i = 0; i < fru__fieldcount[atype]; i++) {
+		if (!add_field_to_area(area_out, &bytes, in_field[atype][i])) {
+			fru_errno.src = (fru_error_source_t)atype;
+			fru_errno.index = i;
 			return false;
+		}
 	}
 
 	/* Now process cusom fields if any */
 	fru__reclist_t * cust = cust_head[info_atype];
+
+	i = 0;
 	while (cust) {
 		fru_field_t * field = cust->rec;
 
-		if (!add_field_to_area(area_out, &bytes, field))
+		if (!add_field_to_area(area_out, &bytes, field)) {
+			fru_errno.src = (fru_error_source_t)atype;
+			fru_errno.index = fru__fieldcount[atype] + i;
 			return false;
+		}
 
 		cust = cust->next;
 	}
@@ -508,19 +506,24 @@ bool encode_mr_area(void * area_out, size_t * size,
 		 * caller's side, so we bail out with an error.
 		 */
 		*size = 0;
-		fru_errno = FEMRNOREC;
+		fru__seterr(FENOREC, FERR_LOC_MR, 0); // No record 0 in MR
 		return false;
 	}
 
+	size_t index = 0;
 	fru__mr_reclist_t * entry = (fru__mr_reclist_t *)fru->mr;
 	for (; entry; entry = entry->next) {
 		size_t entry_size = 0;
 		if (area_out) {
 			outptr = area_out + mr_size;
 		}
-		if (!encode_mr_record(outptr, &entry_size, entry->rec, entry->next == NULL))
+		if (!encode_mr_record(outptr, &entry_size, entry->rec, entry->next == NULL)) {
+			fru_errno.src = FERR_LOC_MR;
+			fru_errno.index = index;
 			return false;
+		}
 		mr_size += entry_size;
+		index++;
 	}
 
 	/* The returned size is expected to be block-aligned */
@@ -558,7 +561,7 @@ static bool create_frufile(fru__file_t * frufile, size_t * size, const fru_t * f
 		if (processed[type]) {
 			// This is a sign that fru wasn't properly initialized
 			DEBUG("Area type %d have already been processed\n", type);
-			fru_errno = FEAREADUP;
+			fru__seterr(FEAREADUP, type, -1);
 			return false;
 		}
 		processed[type] = true;
@@ -613,7 +616,7 @@ bool fru_savebuffer(void ** bufptr, size_t * size, const fru_t * fru)
 	bool allocated = false;
 
 	if (!fru || !bufptr || !size) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		errno = EFAULT;
 		goto err;
 	}
@@ -632,7 +635,7 @@ bool fru_savebuffer(void ** bufptr, size_t * size, const fru_t * fru)
 		DEBUG("Allocating %zu bytes for FRU file buffer", realsize);
 		*bufptr = calloc(1, realsize);
 		if (!*bufptr) {
-			fru_errno = FEGENERIC;
+			fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 			goto err;
 		}
 		DEBUG("Got a buffer from %p to %p", *bufptr, (void *)*bufptr + realsize - 1);
@@ -640,7 +643,7 @@ bool fru_savebuffer(void ** bufptr, size_t * size, const fru_t * fru)
 	}
 	else {
 		if (*size < realsize) {
-			fru_errno = FETOOSMALL;
+			fru__seterr(FE2SMALL, FERR_LOC_GENERAL, -1);
 			goto err;
 		}
 		memset(*bufptr, 0, realsize);
@@ -666,25 +669,13 @@ bool fru_savefile(const char * fname, const fru_t * fru)
 	size_t frufile_size = 0;
 
 	if (!fname || !fru) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		errno = EFAULT;
 	}
 
-#if 0
-	if (!create_frufile(NULL, &frufile_size, fru))
-		return false;
-
-	frufile = calloc(1, frufile_size);
-	if (!frufile) {
-		fru_errno = FEGENERIC;
-		return false;
-	}
-#endif
 	if (!fru_savebuffer((void **)&frufile, &frufile_size, fru)) {
 		return false;
 	}
-
-	DEBUG("Got a buffer at %p..%p (%zu bytes) for FRU", frufile, (void *)frufile + frufile_size - 1, frufile_size);
 
 	int fd = open(fname,
 #if __WIN32__ || __WIN64__
@@ -696,7 +687,7 @@ bool fru_savefile(const char * fname, const fru_t * fru)
 
 	if (fd < 0) {
 		DEBUG("Couldn't create file %s: %m", fname);
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 		return false;
 	}
 
@@ -706,7 +697,7 @@ bool fru_savefile(const char * fname, const fru_t * fru)
 		if (0 > rc) {
 			if(EINTR == errno)
 				continue;
-			fru_errno = FEGENERIC;
+			fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
 			DEBUG("Couldn't write to %s: %m", fname);
 			return false;
 		}

@@ -7,6 +7,7 @@
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
 
+#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -43,15 +44,12 @@
 static
 bool hexcopy(char ** outhexstr, const char * hexstr)
 {
+	assert(outhexstr);
+	assert(hexstr);
+
 	size_t i;
 	size_t len = 0;
-	char *newhexstr;
-	if (!outhexstr || !hexstr) {
-		fru_errno = FEGENERIC;
-		errno = EFAULT;
-		return false;
-	}
-	newhexstr = *outhexstr;
+	char *newhexstr = *outhexstr;
 
 	// Check input string sanity, skip delimiters
 	for (i = 0; hexstr[i]; i++) {
@@ -63,7 +61,7 @@ bool hexcopy(char ** outhexstr, const char * hexstr)
 			case '.':
 				continue;
 			default:
-				fru_errno = FENONHEX;
+				fru__seterr(FENONHEX, FERR_LOC_INTERNAL, -1);
 				return false;
 			}
 		}
@@ -73,12 +71,12 @@ bool hexcopy(char ** outhexstr, const char * hexstr)
 	}
 
 	if (len % 2) {
-		fru_errno = FENOTEVEN;
+		fru__seterr(FENOTEVEN, FERR_LOC_INTERNAL, -1);
 	}
 
 	newhexstr = realloc(newhexstr, len + 1);
 	if (!newhexstr) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_INTERNAL, -1);
 		return false;
 	}
 
@@ -109,26 +107,25 @@ bool fru_set_internal_binary(fru_t * fru,
 	bool rc = false;
 
 	if (!fru || !buffer) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
 		errno = EFAULT;
 		goto err;
 	}
 
 	hexstring = realloc(fru->internal, out_len);
 	if (!hexstring) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_INTERNAL, -1);
 		goto err;
 	}
 
-	if(!fru__decode_raw_binary(buffer, size,
-	                           hexstring, out_len))
-	{
+	if (size * 2 + 1 > out_len) {
 		zfree(hexstring);
-		errno = ENOBUFS;
-		fru_errno = FEGENERIC;
+		fru__seterr(FE2BIG, FERR_LOC_INTERNAL, -1);
 		goto err;
 	}
 
+	fru__decode_raw_binary(buffer, size,
+	                       hexstring, out_len);
 	fru->internal = hexstring;
 	fru_enable_area(fru, FRU_INTERNAL_USE, FRU_APOS_AUTO);
 	rc = true;
@@ -140,7 +137,7 @@ err:
 bool fru_set_internal_hexstring(fru_t * fru, const void * hexstr)
 {
 	if (!fru || !hexstr) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_INTERNAL, -1);
 		errno = EFAULT;
 		return false;
 	}
@@ -157,13 +154,13 @@ bool fru_set_internal_hexstring(fru_t * fru, const void * hexstr)
 bool fru_delete_internal(fru_t * fru)
 {
 	if (!fru) {
-		fru_errno = FEGENERIC;
+		fru__seterr(FEGENERIC, FERR_LOC_INTERNAL, -1);
 		errno = EFAULT;
 		return false;
 	}
 
 	if (!fru->present[FRU_INTERNAL_USE]) {
-		fru_errno = FEADISABLED;
+		fru__seterr(FEADISABLED, FERR_LOC_INTERNAL, -1);
 		return false;
 	}
 

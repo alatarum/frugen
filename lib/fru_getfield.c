@@ -19,18 +19,24 @@ fru_field_t * fru_getfield(const fru_t * fru,
 {
 	const fru_field_t *field = NULL;
 
+	if (!fru) {
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
+		errno = EFAULT;
+		goto out;
+	}
+
 	if (!FRU_IS_VALID_AREA(atype)) {
-		fru_errno = FEAREABADTYPE;
+		fru__seterr(FEAREABADTYPE, FERR_LOC_CALLER, atype);
 		goto out;
 	}
 
 	if (!FRU_IS_INFO_AREA(atype)) {
-		fru_errno = FEAREANOTSUP;
+		fru__seterr(FEAREANOTSUP, FERR_LOC_CALLER, atype);
 		goto out;
 	}
 
 	if (!fru->present[atype]) {
-		fru_errno = FEADISABLED;
+		fru__seterr(FEADISABLED, atype, -1);
 		goto out;
 	}
 
@@ -65,7 +71,7 @@ fru_field_t * fru_getfield(const fru_t * fru,
 
 	off_t infoidx = FRU_ATYPE_TO_INFOIDX(atype);
 	if (index >= field_count[infoidx]) {
-		fru_errno = FENOFIELD;
+		fru__seterr(FENOFIELD, atype, index);
 		goto out;
 	}
 

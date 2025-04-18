@@ -6,6 +6,7 @@
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
  */
+#include <assert.h>
 #include <errno.h>
 #include <stddef.h>
 
@@ -27,15 +28,13 @@
 static
 bool delete_reclist_entry(void * head_ptr, int index)
 {
+	assert(head_ptr);
+
 	fru__genlist_t * rec,
 	               * prev_rec,
 	               ** first_rec = (fru__genlist_t **)head_ptr;
 
-	if (!head_ptr)
-		return false;
-
 	rec = fru__find_reclist_entry(head_ptr, (void *)&prev_rec, index);
-
 	if (!rec)
 		return false;
 
@@ -58,16 +57,28 @@ bool fru_delete_custom(fru_t * fru,
 {
 	bool rc = false;
 
-	fru__reclist_t ** cust = fru__get_customlist(fru, atype);
-
-	if (!cust) {
-		DEBUG("Custom list is not available for area type %d\n", atype);
+	if (!fru) {
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
+		errno = EFAULT;
 		goto out;
 	}
 
+	if (atype < FRU_MIN_AREA || atype > FRU_MAX_AREA) {
+		fru__seterr(FEAREABADTYPE, FERR_LOC_CALLER, atype);
+		goto out;
+	}
+
+	if (!FRU_IS_INFO_AREA(atype)) {
+		fru__seterr(FEAREANOTSUP, FERR_LOC_CALLER, atype);
+		goto out;
+	}
+
+	fru__reclist_t ** cust = fru__get_customlist(fru, atype);
+
 	if (!delete_reclist_entry(cust, index)) {
-		DEBUG("Failed to delete reclist entry: %s\n", fru_strerr(fru_errno));
-		fru_errno = FENOFIELD;
+		DEBUG("Failed to delete reclist entry: %s\n", fru_strerr(ru_errno));
+		// Custom fields start at FRU_<atype>_FIELD_COUNT index
+		fru__seterr(FENOFIELD, atype, fru__fieldcount[atype] + index);
 		goto out;
 	}
 

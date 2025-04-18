@@ -9,13 +9,24 @@
 
 #include <errno.h>
 
-#include "fru.h"
+#include "fru-private.h"
 #include "../fru_errno.h"
 
 bool fru_enable_area(fru_t * fru, fru_area_type_t atype, fru_area_position_t after)
 {
+	if (!fru) {
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
+		errno = EFAULT;
+		return false;
+	}
+
 	if (!FRU_IS_VALID_AREA(atype)) {
-		fru_errno = FEAREABADTYPE;
+		fru__seterr(FEAREABADTYPE, FERR_LOC_CALLER, atype);
+		return false;
+	}
+
+	if (!FRU_IS_APOS_VALID(after)) {
+		fru__seterr(FEAPOS, FERR_LOC_CALLER, -1);
 		return false;
 	}
 
@@ -24,12 +35,7 @@ bool fru_enable_area(fru_t * fru, fru_area_type_t atype, fru_area_position_t aft
 		 * The function is expected to set up the requested order
 		 * of areas. If already enabled, that can't be done. So fail.
 		 */
-		fru_errno = FEAENABLED;
-		return false;
-	}
-
-	if (!FRU_IS_APOS_VALID(after)) {
-		fru_errno = FEAPOS;
+		fru__seterr(FEAENABLED, atype, -1);
 		return false;
 	}
 
@@ -55,7 +61,7 @@ bool fru_enable_area(fru_t * fru, fru_area_type_t atype, fru_area_position_t aft
 		 * This can only happen if fru_t structure wasn't initialized with fru_init(),
 		 * or if it was later manually tampered with. No library API can result in this.
 		 */
-		fru_errno = FEINIT;
+		fru__seterr(FEINIT, FERR_LOC_GENERAL, -1);
 		return false;
 	}
 
@@ -132,8 +138,14 @@ bool fru_disable_area(fru_t * fru, fru_area_type_t atype)
 	fru_area_position_t new_pos;
 	fru_area_position_t i;
 
+	if (!fru) {
+		fru__seterr(FEGENERIC, FERR_LOC_CALLER, -1);
+		errno = EFAULT;
+		return false;
+	}
+
 	if (!FRU_IS_VALID_AREA(atype)) {
-		fru_errno = FEAREABADTYPE;
+		fru__seterr(FEAREABADTYPE, FERR_LOC_CALLER, atype);
 		return false;
 	}
 
@@ -142,7 +154,7 @@ bool fru_disable_area(fru_t * fru, fru_area_type_t atype)
 		 * No extra actions are expected, so report success but still
 		 * register the error condition
 		 */
-		fru_errno = FEAENABLED;
+		fru__seterr(FEAENABLED, atype, -1);
 		return true;
 	}
 
@@ -164,7 +176,7 @@ bool fru_disable_area(fru_t * fru, fru_area_type_t atype)
 		 * This can only happen if fru_t structure wasn't initialized with fru_init(),
 		 * or if it was later manually tampered with. No library API can result in this.
 		 */
-		fru_errno = FEINIT;
+		fru__seterr(FEINIT, FERR_LOC_CALLER, -1);
 		return false;
 	}
 
@@ -199,8 +211,8 @@ bool fru_disable_area(fru_t * fru, fru_area_type_t atype)
 
 bool fru_move_area(fru_t * fru, fru_area_type_t area, fru_area_position_t after)
 {
-	fru_errno = FENONE;
-	if (!fru_disable_area(fru, area) || fru_errno)
+	fru_clearerr();
+	if (!fru_disable_area(fru, area) || fru_errno.code)
 		return false;
 
 	return fru_enable_area(fru, area, after);
