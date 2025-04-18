@@ -37,19 +37,20 @@ extern const struct area_names_s {
 
 void fru_perror(FILE *fp, const char *fmt, ...);
 
-#define fatal(fmt, args...) do {  \
+#define fatal(fmt, args...) do { \
+	fprintf(stderr, "ERROR: "); \
 	fprintf(stderr, fmt, ##args); \
-	fprintf(stderr, "\n");        \
-	exit(1);                      \
+	fprintf(stderr, "\n"); \
+	exit(1); \
 } while(0)
 
-#define warn(fmt, args...) do {   \
-	typeof(errno) e = errno;      \
+#define warn(fmt, args...) do { \
+	typeof(errno) e = errno; \
 	fprintf(stderr, "WARNING: "); \
-	errno = e;                    \
+	errno = e; \
 	fprintf(stderr, fmt, ##args); \
-	fprintf(stderr, "\n");        \
-	errno = e;                    \
+	fprintf(stderr, "\n"); \
+	errno = e; \
 } while(0)
 
 #define fru_fatal(fmt, args...) do { \
@@ -62,14 +63,14 @@ void fru_perror(FILE *fp, const char *fmt, ...);
 } while(0)
 
 #define debug(level, fmt, args...) do { \
-	typeof(errno) e = errno;            \
-	if(level <= debug_level) {          \
-		printf("DEBUG: ");              \
-		errno = e;                      \
-		printf(fmt, ##args);            \
-		printf("\n");                   \
-		errno = e;                      \
-	}                                   \
+	typeof(errno) e = errno; \
+	if(level <= debug_level) { \
+		printf("DEBUG: "); \
+		errno = e; \
+		printf(fmt, ##args); \
+		printf("\n"); \
+		errno = e; \
+	} \
 } while(0)
 
 #define FRU_FIELD_CUSTOM (-1) // Applicable to any area

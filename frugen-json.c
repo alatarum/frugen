@@ -77,13 +77,13 @@ bool load_single_field(fru_field_t * field, json_object * jsfield)
 		encoding = FRU_FE_AUTO;
 		val = json_object_get_string(jsfield);
 		if (!val) {
-			fru_warn("Field is neither an object, nor a string");
+			warn("Field is neither an object, nor a string");
 			goto out;
 		}
 	}
 
 	if (!fru_setfield(field, encoding, val)) {
-		fru_warn("Couldn't add field");
+		warn("Couldn't add field: %s", fru_strerr(fru_errno));
 		goto out;
 	}
 
@@ -576,7 +576,7 @@ bool load_info_area(fru_t * fru,
                              json_object * jso)
 {
 	if (!load_info_fields(fru, atype, jso)) {
-		warn("Couldn't load standard fields for %s",
+		warn("Couldn't load standard or custom fields for %s",
 		      area_names[atype].human);
 		return false;
 	}
@@ -714,7 +714,7 @@ out:
 	
 	if (!success) {
 		if (FRU_IS_VALID_AREA(atype))
-			fatal("Failed to load %s (%d) Area", area_names[atype].human, (int)atype);
+			fatal("Failed to load %s Area", area_names[atype].human);
 		else
 			fatal("Failed to load FRU from JSON file");
 	}
