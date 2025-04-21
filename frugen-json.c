@@ -791,6 +791,10 @@ void save_to_json_file(FILE **fp, const char *fname,
 	}
 
 	/* Write out the json tree to file */
+#ifndef JSON_C_TO_STRING_NOSLASHESCAPE
+#define JSON_C_TO_STRING_NOSLASHESCAPE 0 // Not supported, ignore
+#endif
+
 	json_object_to_fd(fileno(*fp), json_root,
 	                  JSON_C_TO_STRING_PRETTY
 	                  | JSON_C_TO_STRING_SPACED

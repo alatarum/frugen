@@ -796,6 +796,7 @@ fru_t * fru_loadfile(fru_t * init_fru,
 	int fd;
 	fru_t * fru = NULL;
 	void * buffer;
+	int err = 0;
 
 	if (!filename) {
 		fru__seterr(FEGENERIC, FERR_LOC_GENERAL, -1);
@@ -831,7 +832,7 @@ fru_t * fru_loadfile(fru_t * init_fru,
 	munmap(buffer, statbuf.st_size);
 
 err:
-	int err = errno; // Preserve
+	err = errno; // Preserve
 	close(fd);
 	errno = err;
 
