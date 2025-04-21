@@ -13,8 +13,5 @@
  */
 void frugen_loadfile_json(fru_t * fru, const char * fname);
 
-#if 0
 void save_to_json_file(FILE **fp, const char *fname,
-                       const struct frugen_fruinfo_s *info,
-                       const struct frugen_config_s *config);
-#endif
+                       const fru_t * fru);

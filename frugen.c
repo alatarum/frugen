@@ -39,6 +39,39 @@
 
 volatile int debug_level = 0;
 
+const frugen_name_t chassis_fields[FRU_CHASSIS_FIELD_COUNT] = {
+	[FRU_CHASSIS_PARTNO] = { "pn", "Part Number" },
+	[FRU_CHASSIS_SERIAL] = { "serial", "Serial Number" },
+};
+
+const frugen_name_t board_fields[FRU_BOARD_FIELD_COUNT] = {
+	[FRU_BOARD_MFG] = { "mfg", "Manufacturer" },
+	[FRU_BOARD_PRODNAME] = { "pname", "Product Name" },
+	[FRU_BOARD_SERIAL] = { "serial", "Serial Number" },
+	[FRU_BOARD_PARTNO] = { "pn", "Part Number" },
+	[FRU_BOARD_FILE] = { "file", "FRU File ID" },
+};
+const frugen_name_t product_fields[FRU_PROD_FIELD_COUNT] = {
+	[FRU_PROD_MFG] = { "mfg", "Manufacturer" },
+	[FRU_PROD_NAME] = { "pname", "Product Name" },
+	[FRU_PROD_MODELPN] = { "pn", "Part/Model Number" },
+	[FRU_PROD_VERSION] = { "version", "Version" },
+	[FRU_PROD_SERIAL] = { "serial", "Serial Number" },
+	[FRU_PROD_ASSET] = { "atag", "Asset Tag" },
+	[FRU_PROD_FILE] = { "file", "FRU File ID" },
+};
+
+const size_t field_max[FRU_TOTAL_AREAS] = {
+	[FRU_CHASSIS_INFO] = FRU_CHASSIS_FIELD_COUNT,
+	[FRU_BOARD_INFO] = FRU_BOARD_FIELD_COUNT,
+	[FRU_PRODUCT_INFO] = FRU_PROD_FIELD_COUNT,
+};
+const frugen_name_t * const field_name[FRU_TOTAL_AREAS] = {
+	[FRU_CHASSIS_INFO] = chassis_fields,
+	[FRU_BOARD_INFO] = board_fields,
+	[FRU_PRODUCT_INFO] = product_fields,
+};
+
 /* List only the encodings that can be legally saved in
  * a fru_field_t. That is all real encodings plus 'auto' and 'empty'.
  * FRU_FE_PRESERVE can only be used as a parameter to fru_setfield()
@@ -83,15 +116,14 @@ fru_field_enc_t frugen_enc_by_name(const char * name)
 
 #define MGMT_TYPENAME_ID(name) FRU_MR_MGMT_SUBTYPE_TO_IDX(FRU_MR_MGMT_##name)
 
-static
-const char * const frugen_mr_mgmt_name[FRU_MR_MGMT_INDEX_COUNT] = {
-	[MGMT_TYPENAME_ID(SYS_URL)] = "surl",
-	[MGMT_TYPENAME_ID(SYS_NAME)] = "sname",
-	[MGMT_TYPENAME_ID(SYS_PING)] = "spingaddr",
-	[MGMT_TYPENAME_ID(COMPONENT_URL)] = "curl",
-	[MGMT_TYPENAME_ID(COMPONENT_NAME)] = "cname",
-	[MGMT_TYPENAME_ID(COMPONENT_PING)] = "cpingaddr",
-	[MGMT_TYPENAME_ID(SYS_UUID)] = "uuid"
+const frugen_name_t frugen_mr_mgmt_name[FRU_MR_MGMT_INDEX_COUNT] = {
+	[MGMT_TYPENAME_ID(SYS_URL)] = { "surl", "System URL" },
+	[MGMT_TYPENAME_ID(SYS_NAME)] = { "sname", "System Name" },
+	[MGMT_TYPENAME_ID(SYS_PING)] = { "spingaddr", "System Ping Address" },
+	[MGMT_TYPENAME_ID(COMPONENT_URL)] = { "curl", "Component URL" },
+	[MGMT_TYPENAME_ID(COMPONENT_NAME)] = { "cname", "Component Name" },
+	[MGMT_TYPENAME_ID(COMPONENT_PING)] = { "cpingaddr", "Component Ping Address" },
+	[MGMT_TYPENAME_ID(SYS_UUID)] = { "uuid", "System Unique ID" },
 };
 
 fru_mr_mgmt_type_t frugen_mr_mgmt_type_by_name(const char * name)
@@ -105,7 +137,7 @@ fru_mr_mgmt_type_t frugen_mr_mgmt_type_by_name(const char * name)
 	}
 
 	for (i = MGMT_TYPENAME_ID(MIN); i <= MGMT_TYPENAME_ID(MAX); i++) {
-		if (!strcmp(frugen_mr_mgmt_name[i], name)) {
+		if (!strcmp(frugen_mr_mgmt_name[i].json, name)) {
 			subtype = FRU_MR_MGMT_IDX_TO_SUBTYPE(i);
 			goto out;
 		}
@@ -115,13 +147,13 @@ out:
 	return subtype;
 }
 
-const char * frugen_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
+const frugen_name_t * frugen_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
 {
 	off_t i = FRU_MR_MGMT_SUBTYPE_TO_IDX(type);
 	if (!FRU_MR_MGMT_IS_SUBTYPE_VALID(i)) {
 		fatal("FRU MR Management Record type %d is out of range", type);
 	}
-	return frugen_mr_mgmt_name[i];
+	return &frugen_mr_mgmt_name[i];
 }
 
 static inline
@@ -318,43 +350,26 @@ static struct frugen_config_s config = {
 
 void tv_to_datestr(char * datestr, const struct timeval * tv)
 {
+		const struct timeval tv_unspecified = { 0 };
+
+		if (!memcmp(&tv_unspecified, tv, sizeof(*tv))) {
+			datestr[0] = 0; // Empty string for 'unspecified'
+		}
+
 		tzset(); // Set up local timezone
 		struct tm bdtime;
 		// Time in FRU is in UTC, convert to local
 		time_t seconds = tv->tv_sec - timezone;
 		localtime_r(&seconds, &bdtime);
-		strftime(datestr, 20, "%d/%m/%Y %H:%M", &bdtime);
+		strftime(datestr, DATEBUF_SZ, "%d/%m/%Y %H:%M %Z", &bdtime);
 }
 
-const struct area_names_s area_names[FRU_TOTAL_AREAS] = {
+const frugen_name_t area_names[FRU_TOTAL_AREAS] = {
 	[ FRU_INTERNAL_USE ] = { "internal", "Internal Use" },
 	[ FRU_CHASSIS_INFO ] = { "chassis", "Chassis Information" },
 	[ FRU_BOARD_INFO ] = { "board", "Board Information" },
 	[ FRU_PRODUCT_INFO ] = { "product", "Product Information" },
 	[ FRU_MR ] = { "multirecord", "Multirecord" }
-};
-
-const char * const field_names[FRU_INFO_AREAS][FRU_MAX_FIELD_COUNT] = {
-	[FRU_INFOIDX(CHASSIS)] = {
-		"Chassis Part Number",
-		"Chassis Serial Number",
-	},
-	[FRU_INFOIDX(BOARD)] = {
-		"Board Manufacturer",
-		"Board Product Name",
-		"Board Serial Number",
-		"Board Part Number",
-		"FRU File ID",
-	},
-	[FRU_INFOIDX(PRODUCT)] = {
-		"Manufacturer Name",
-		"Product Name",
-		"Product Part/Model Number",
-		"Product Version",
-		"Product Serial Number",
-		"Asset Tag",
-		"FRU File ID",
-	}
 };
 
 fru_errno_t get_fru_errno(void)
@@ -388,61 +403,25 @@ void fru_perror(FILE *fp, const char *fmt, ...)
 		if (fru_errno.code == FEAREANOTSUP || fru_errno.code == FEAREABADTYPE) {
 			fprintf(fp, "(%d)", fru_errno.index);
 		}
-		else if (fru_errno.src != FERR_LOC_MR) {
-			/*
-			 * TODO: print field names for standard fields,
-			 *       and adjust custom field indices to base 0
-			 */
-			fprintf(fp, "(field %d)", fru_errno.index);
+		else if (FRU_IS_INFO_AREA((fru_area_type_t)fru_errno.src)) {
+			if (fru_errno.index < (int)field_max[fru_errno.src])
+				fprintf(fp, "(field '%s')",
+				        field_name[fru_errno.src][fru_errno.index].json);
+			else
+				fprintf(fp, "(field 'custom.%d')",
+				        fru_errno.index - (int)field_max[fru_errno.src]);
 		}
-		else {
+		else if (fru_errno.src == FERR_LOC_MR) {
 			fprintf(fp, "(record %d)", fru_errno.index);
 		}
 	}
 	fputc('\n', fp);
 }
 
-const size_t field_counts[FRU_INFO_AREAS] = {
-	[FRU_INFOIDX(CHASSIS)] = FRU_CHASSIS_FIELD_COUNT,
-	[FRU_INFOIDX(BOARD)] = FRU_BOARD_FIELD_COUNT,
-	[FRU_INFOIDX(PRODUCT)] = FRU_PROD_FIELD_COUNT,
-};
-
 fieldopt_t arg_to_fieldopt(char * arg)
 {
 	fieldopt_t opt = { .type = FRU_FE_PRESERVE };
-
-	const char * const chassis_fields[FRU_CHASSIS_FIELD_COUNT] = {
-		[FRU_CHASSIS_PARTNO] = "pn",
-		[FRU_CHASSIS_SERIAL] = "serial",
-	};
-	const char * const board_fields[FRU_BOARD_FIELD_COUNT] = {
-		[FRU_BOARD_MFG] = "mfg",
-		[FRU_BOARD_PRODNAME] = "pname",
-		[FRU_BOARD_SERIAL] = "serial",
-		[FRU_BOARD_PARTNO] = "pn",
-		[FRU_BOARD_FILE] = "file",
-	};
-	const char * const product_fields[FRU_PROD_FIELD_COUNT] = {
-		[FRU_PROD_MFG] = "mfg",
-		[FRU_PROD_NAME] = "pname",
-		[FRU_PROD_MODELPN] = "pn",
-		[FRU_PROD_VERSION] = "version",
-		[FRU_PROD_SERIAL] = "serial",
-		[FRU_PROD_ASSET] = "atag",
-		[FRU_PROD_FILE] = "file",
-	};
 	char * p;
-	int field_max[FRU_TOTAL_AREAS] = {
-		[FRU_CHASSIS_INFO] = FRU_CHASSIS_FIELD_COUNT,
-		[FRU_BOARD_INFO] = FRU_BOARD_FIELD_COUNT,
-		[FRU_PRODUCT_INFO] = FRU_PROD_FIELD_COUNT,
-	};
-	const char * const * const fields[FRU_TOTAL_AREAS] = {
-		[FRU_CHASSIS_INFO] = chassis_fields,
-		[FRU_BOARD_INFO] = board_fields,
-		[FRU_PRODUCT_INFO] = product_fields,
-	};
 
 	/* Check if there is an encoding specifier */
 	p = strchr(arg, ':');
@@ -501,7 +480,7 @@ fieldopt_t arg_to_fieldopt(char * arg)
 	for (opt.field.index = field_max[opt.area] - 1;
 		 opt.field.index > FRU_FIELD_NOT_PRESENT; opt.field.index--)
 	{
-		if (!strcmp(arg, fields[opt.area][opt.field.index]))
+		if (!strcmp(arg, field_name[opt.area][opt.field.index].json))
 			break;
 	}
 	if (opt.field.index == FRU_FIELD_NOT_PRESENT) {
@@ -526,7 +505,7 @@ fieldopt_t arg_to_fieldopt(char * arg)
 	debug(2, "Field '%s' is being set in '%s' to '%s'",
 	         opt.field.index == FRU_FIELD_CUSTOM
 	                            ? "custom"
-	                            : fields[opt.area][opt.field.index],
+	                            : field_name[opt.area][opt.field.index].json,
 	         area_names[opt.area].json,
 	         opt.value);
 
@@ -576,7 +555,7 @@ void print_info_area(FILE ** fp, const fru_t * fru, fru_area_type_t atype)
 	}
 
 	if (FRU_BOARD_INFO == atype) {
-		char datebuf[DATEBUF_SZ];
+		char datebuf[DATEBUF_SZ] = {};
 		struct timeval tv_unspec = {};
 
 		if (!memcmp(&fru->board.tv, &tv_unspec, sizeof(tv_unspec))) {
@@ -593,12 +572,11 @@ void print_info_area(FILE ** fp, const fru_t * fru, fru_area_type_t atype)
 	}
 
 	/* Then print out the mandatory fields */
-	size_t infoidx = FRU_ATYPE_TO_INFOIDX(atype);
-	for (size_t i = 0; i < field_counts[infoidx]; i++) {
-		const char * name = field_names[infoidx][i];
+	for (size_t i = 0; i < field_max[atype]; i++) {
+		const char * const name = field_name[atype][i].human;
 		const fru_field_t * field = fru_getfield(fru, atype, i);
 		if (!field)
-			fru_fatal("Failed to get %s from %s", name, aname);
+			fru_fatal("Failed to get standard field '%s' from '%s'", name, aname);
 
 		const char * encoding = frugen_enc_name_by_val(field->enc);
 		fprintf(*fp, "   %25s: [%9s] \"%s\"\n",
@@ -628,18 +606,7 @@ void print_info_area(FILE ** fp, const fru_t * fru, fru_area_type_t atype)
 
 void print_mr_area(FILE ** fp, size_t mr_index, fru_mr_rec_t * mr_rec)
 {
-	static const char * const mgmt_st_names[FRU_MR_MGMT_INDEX_COUNT] = {
-		[MGMT_TYPENAME_ID(SYS_URL)] = "System URL",
-		[MGMT_TYPENAME_ID(SYS_NAME)] = "System Name",
-		[MGMT_TYPENAME_ID(SYS_PING)] = "System Ping Address",
-		[MGMT_TYPENAME_ID(COMPONENT_URL)] = "Component URL",
-		[MGMT_TYPENAME_ID(COMPONENT_NAME)] = "Component Name",
-		[MGMT_TYPENAME_ID(COMPONENT_PING)] = "Component Ping Address",
-		[MGMT_TYPENAME_ID(SYS_UUID)] = "System Unique ID",
-	};
-
 	fru_mr_mgmt_type_t subtype = mr_rec->mgmt.subtype;
-	off_t idx = FRU_MR_MGMT_SUBTYPE_TO_IDX(subtype);
 	bool valid = FRU_MR_MGMT_IS_SUBTYPE_VALID(subtype);
 	fru_mr_type_t mr_type = mr_rec->type;
 	if (mr_type == FRU_MR_RAW)
@@ -669,10 +636,10 @@ void print_mr_area(FILE ** fp, size_t mr_index, fru_mr_rec_t * mr_rec)
 		        "       Subtype %d: %s (%s)\n",
 		        subtype,
 		        valid
-		        ? mgmt_st_names[idx]
+		        ? frugen_mr_mgmt_name_by_type(subtype)->human
 		        : "INVALID",
 		        valid
-		        ? frugen_mr_mgmt_name_by_type(subtype)
+		        ? frugen_mr_mgmt_name_by_type(subtype)->json
 		        : "-"
 		);
 		fprintf(*fp, "       Data     : %s\n", mr_rec->mgmt.data);
@@ -705,12 +672,18 @@ void print_area(FILE ** fp, const fru_t * fru, fru_area_type_t atype)
 		break;
 
 	case FRU_MR:
+		fru_clearerr();
 		while((mr_rec = fru_get_mr(fru, mr_index))) {
 			print_mr_area(fp, mr_index, mr_rec);
 			mr_index++;
 		}
 		if (!mr_index) {
-			fprintf(*fp, "   %25s\n", "The area is empty");
+			if (fru_errno.code == FENONE) {
+				fprintf(*fp, "   %25s\n", "The area is empty");
+			}
+			else {
+				fru_perror(*fp, "   Probably a frugen BUG");
+			}
 		}
 		break;
 	default:
@@ -1188,9 +1161,7 @@ int main(int argc, char * argv[])
 	switch (config.outformat) {
 #ifdef __HAS_JSON__
 	case FRUGEN_FMT_JSON:
-		/* TODO: Enable when json is fixed for new API */
-		printf("JSON support is crippled yet\n");
-		//save_to_json_file(&fp, fname, fru, &config);
+		save_to_json_file(&fp, fname, fru);
 		break;
 #endif
 	case FRUGEN_FMT_TEXTOUT:

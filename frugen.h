@@ -29,11 +29,16 @@ struct frugen_config_s {
 	fru_flags_t flags;
 };
 
+typedef struct {
+	const char * const json;
+	const char * const human;
+} frugen_name_t;
+
 extern volatile int debug_level;
-extern const struct area_names_s {
-	const char * json;
-	const char * human;
-} area_names[FRU_TOTAL_AREAS];
+extern const frugen_name_t area_names[FRU_TOTAL_AREAS];
+extern const size_t field_max[FRU_TOTAL_AREAS];
+extern const frugen_name_t * const field_name[FRU_TOTAL_AREAS];
+extern const frugen_name_t frugen_mr_mgmt_name[FRU_MR_MGMT_INDEX_COUNT];
 
 void fru_perror(FILE *fp, const char *fmt, ...);
 
@@ -91,7 +96,7 @@ typedef struct {
 	int custom_index;
 } fieldopt_t;
 
-#define DATEBUF_SZ 20 ///< Date string buffer length (must fit "DD/MM/YYYY HH:MM:SS")
+#define DATEBUF_SZ 29 ///< Date string buffer length (must fit "DD/MM/YYYY HH:MM:SS UTC+XXXX")
 /**
  * Convert local date/time string to UTC time in seconds for FRU
  */
@@ -152,7 +157,7 @@ fru_mr_mgmt_type_t frugen_mr_mgmt_type_by_name(const char *name);
  *
  * Reverse of frugen_mr_mgmt_type_by_name()
  */
-const char * frugen_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type);
+const frugen_name_t * frugen_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type);
 
 /**
  * Find a field encoding type by its short name

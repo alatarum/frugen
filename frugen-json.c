@@ -379,194 +379,6 @@ bool json_from_mr_reclist(json_object **jso,
                           const fru_mr_reclist_t *mr_reclist,
                           fru_flags_t flags)
 {
-	bool rc = false;
-	json_object *mr_jso = NULL;
-	const fru_mr_reclist_t *item = mr_reclist;
-
-	if (!mr_reclist)
-		goto out;
-
-	if (!jso)
-		goto out;
-
-	mr_jso = json_object_new_array();
-	if (!mr_jso) {
-		printf("Failed to allocate a new JSON array for multirecord area\n");
-		goto out;
-	}
-
-	if (json_object_get_type(mr_jso) != json_type_array)
-		goto out;
-
-	while (item) {
-		fru_mr_rec_t *rec = item->rec;
-		size_t key_count = 0;
-		bool mr_valid = false;
-		// Pointers to allocated strings, depending on the found record
-#define MAX_MR_KEYS 5 // Index 0 is always 'type', the rest depends on the type
-		union { char *str; int num; } values[MAX_MR_KEYS] = {};
-		char *keys[MAX_MR_KEYS] = {};
-		enum { MR_TYPE_STR, MR_TYPE_INT } types[MAX_MR_KEYS] = {};
-		switch (rec->hdr.type_id) {
-			case FRU_MR_MGMT_ACCESS: {
-				bool mgmt_valid = true;
-				fru_mr_mgmt_rec_t *mgmt = (fru_mr_mgmt_rec_t *)rec;
-				int rc;
-				/* We need to allocate keys entries */
-				sscanf("management", "%ms", &values[0].str); // keys[0] allocated later
-				sscanf("subtype", "%ms", &keys[1]); // values[1] allocated later
-#define MGMT_TYPE_ID(type) ((type) - FRU_MR_MGMT_MIN)
-				switch (mgmt->subtype) {
-				case FRU_MR_MGMT_SYS_UUID:
-					if ((rc = fru_mr_rec2uuid(&values[2].str, mgmt, flags))) {
-						printf("Could not decode the UUID record: %s\n",
-						       strerror(-rc));
-						break;
-					}
-					break;
-				case FRU_MR_MGMT_SYS_URL:
-				case FRU_MR_MGMT_SYS_NAME:
-				case FRU_MR_MGMT_SYS_PING:
-				case FRU_MR_MGMT_COMPONENT_URL:
-				case FRU_MR_MGMT_COMPONENT_NAME:
-				case FRU_MR_MGMT_COMPONENT_PING:
-					if ((rc = fru_mr_mgmt_rec2str(&values[2].str, mgmt, flags))) {
-						char *subtype = fru_mr_mgmt_name_by_type(mgmt->subtype);
-						printf("Could not decode the Mgmt Access record '%s': %s\n",
-						       subtype,
-						       strerror(-rc));
-						free(subtype);
-						break;
-					}
-					break;
-				default:
-					debug(1, "Multirecord Management subtype 0x%02X is not yet supported",
-					      mgmt->subtype);
-					mgmt_valid = false;
-				}
-
-				if (mgmt_valid) {
-					/* Two calls to make it allocated twice for uniform deallocation later */
-					values[1].str = fru_mr_mgmt_name_by_type(mgmt->subtype);
-					keys[2] = fru_mr_mgmt_name_by_type(mgmt->subtype);
-					key_count = 3;
-					mr_valid = true;
-				}
-				break;
-			}
-			case FRU_MR_PSU_INFO:
-				debug(1, "Found a PSU info record (not yet supported, skipped)");
-				break;
-			default: {
-				debug(1, "Multirecord type 0x%02X is not yet supported, decoding as 'custom'",
-				      rec->hdr.type_id);
-				int rc;
-				sscanf("custom", "%ms", &values[0].str); // keys[0] allocated later
-				sscanf("custom_type", "%ms", &keys[1]); // values[1] allocated later
-				types[1] = MR_TYPE_INT;
-				values[1].num = rec->hdr.type_id;
-
-				sscanf("data", "%ms", &keys[2]); // values[1] allocated later
-				rc = fru_mr_rec2hexstr(&values[2].str, rec, flags);
-				if (rc) {
-					fatal("Could not decode as a custom record: %s\n", strerror(-rc));
-					break;
-				}
-				mr_valid = true;
-				key_count = 3;
-				debug(1, "Custom MR record decoded: %s", values[2].str);
-				break;
-			}
-
-		}
-
-		if (mr_valid && key_count) {
-			struct json_object *entry;
-			size_t j = 0;
-
-			if ((entry = json_object_new_object()) == NULL)
-				fatal("Failed to allocate a new JSON entry for MR record");
-
-			sscanf("type", "%ms", &keys[0]); // This is common for all valid MR records
-			for (; j < key_count; j++) {
-				struct json_object *vobj = NULL;
-
-				if (!keys[j] || (MR_TYPE_STR == types[j] && !values[j].str))
-					fatal("Internal error. Required key or value not found. Please report.");
-
-				switch (types[j]) {
-					case MR_TYPE_STR:
-						vobj = json_object_new_string((const char *)values[j].str);
-						free(values[j].str);
-						values[j].str = NULL;
-						break;
-					case MR_TYPE_INT:
-						vobj = json_object_new_int((int32_t)values[j].num);
-						values[j].num = 0;
-						break;
-					default:
-						break;
-				}
-				if (!vobj)
-					fatal("Failed to allocate a JSON object for value of '%s'", keys[j]);
-
-				json_object_object_add(entry, keys[j], vobj);
-				free(keys[j]);
-				keys[j] = NULL;
-			}
-			if (j && j == key_count) {
-				json_object_array_add(mr_jso, entry);
-			}
-		}
-		item = item->next;
-	}
-
-	rc = true;
-out:
-	if (!rc && mr_jso) {
-		json_object_put(mr_jso);
-		mr_jso = NULL;
-	}
-	*jso = mr_jso;
-	return rc;
-}
-#endif
-
-#if 0
-static
-int json_object_add_with_type(struct json_object* obj,
-                              const char* key,
-                              const char* val,
-                              int type)
-{
-	struct json_object *string, *type_string, *entry;
-	if ((string = json_object_new_string((const char *)val)) == NULL)
-		goto STRING_ERR;
-
-	if (type == FRU_FE_AUTO) {
-		entry = string;
-	} else {
-		const char *enc_name = frugen_enc_name_by_val(type);
-		if ((type_string = json_object_new_string(enc_name)) == NULL)
-			goto TYPE_STRING_ERR;
-		if ((entry = json_object_new_object()) == NULL)
-			goto ENTRY_ERR;
-		json_object_object_add(entry, "type", type_string);
-		json_object_object_add(entry, "data", string);
-	}
-	if (key == NULL) {
-		return json_object_array_add(obj, entry);
-	} else {
-		json_object_object_add(obj, key, entry);
-		return 0;
-	}
-
-ENTRY_ERR:
-	json_object_put(type_string);
-TYPE_STRING_ERR:
-	json_object_put(string);
-STRING_ERR:
-	return -1;
 }
 #endif
 
@@ -722,15 +534,227 @@ out:
 	json_object_put(jstree);
 }
 
-#if 0
+
+void add_iu_area_json(struct json_object * jso,
+                      const char * internal)
+{
+	assert(internal);
+
+	struct json_object *section = json_object_new_string(internal);
+	json_object_object_add(jso, "internal", section);
+}
+
+static
+bool add_info_field(struct json_object * jso,
+                    const char * key,
+                    const fru_field_t * field)
+{
+	struct json_object *string, *type_string, *entry;
+	if ((string = json_object_new_string(field->val)) == NULL)
+		goto STRING_ERR;
+
+	if (field->enc == FRU_FE_AUTO) {
+		entry = string;
+	} else {
+		const char *enc_name = frugen_enc_name_by_val(field->enc);
+		if ((type_string = json_object_new_string(enc_name)) == NULL)
+			goto TYPE_STRING_ERR;
+		if ((entry = json_object_new_object()) == NULL)
+			goto ENTRY_ERR;
+		json_object_object_add(entry, "type", type_string);
+		json_object_object_add(entry, "data", string);
+	}
+	if (key == NULL) {
+		/* No key, make jso an array, used for multirecord */
+		json_object_array_add(jso, entry);
+	} else {
+		/* Key is specified, add a named string or object */
+		json_object_object_add(jso, key, entry);
+	}
+	return true;
+
+ENTRY_ERR:
+	json_object_put(type_string);
+TYPE_STRING_ERR:
+	json_object_put(string);
+STRING_ERR:
+	return false;
+}
+
+
+void add_info_area_json(struct json_object * jso,
+                        fru_area_type_t atype,
+                        const fru_t * fru)
+{
+	assert(fru);
+	assert(jso);
+
+	struct json_object * section = json_object_new_object();
+
+	const fru_field_t * field = NULL;
+	const char * const aname = area_names[atype].json;
+
+	/* Add area-specific fields */
+	struct json_object * tmp_obj = json_object_new_object();
+	if (FRU_ATYPE_HAS_TYPE(atype)) {
+		tmp_obj = json_object_new_int(fru->chassis.type);
+		json_object_object_add(section, "type", tmp_obj);
+	}
+	else if (FRU_ATYPE_HAS_LANG(atype)) {
+		section = json_object_new_object();
+		tmp_obj = json_object_new_int(fru->product.lang);
+		json_object_object_add(section, "lang", tmp_obj);
+	}
+
+	if (atype == FRU_BOARD_INFO) {
+		/* Board has a date field */
+		struct timeval tv = fru->board.tv;
+		fru_field_t datefield;
+		datefield.enc = FRU_FE_AUTO; // Ensure it's saved as a plain string
+
+		if (fru->board.tv_auto) {
+			strcpy(datefield.val, "auto");
+		}
+		else {
+			tv_to_datestr(datefield.val, &tv);
+		}
+		if (datefield.val[0]) {
+			section = json_object_new_object();
+			add_info_field(section, "date", &datefield);
+		}
+	}
+
+	/* Add standard fields */
+	for (size_t i = 0; i < field_max[atype]; i++) {
+		const char * const name = field_name[atype][i].json;
+		field = fru_getfield(fru, atype, i);
+		if (!field)
+			fru_fatal("Failed to get standard field '%s' from '%s'", name, aname);
+
+		if (!add_info_field(section, name, field))
+			fatal("Failed to add field %s.%s to JSON", aname, name);
+		debug(2, "Added %s.%s to JSON", aname, name);
+	}
+
+	/* Add custom fields */
+	struct json_object * custom_array = json_object_new_array();
+	size_t idx = FRU_LIST_HEAD;
+	while ((field = fru_get_custom(fru, atype, idx))) {
+		if (!add_info_field(custom_array, NULL, field))
+			fatal("Failed to add field %s.custom.%zu to JSON", aname, idx);
+
+		debug(2, "Added %s.custom.%zu to JSON", aname, idx);
+		idx++;
+	}
+	if (fru_errno.code != FENOFIELD)
+		fru_fatal("Failed to get custom fields");
+
+	if (idx == FRU_LIST_HEAD) {
+		/* The list is empty, don't add it */
+		json_object_put(custom_array);
+	}
+	else {
+		json_object_object_add(section, "custom", custom_array);
+	}
+
+	json_object_object_add(jso, aname, section);
+}
+
+void add_mr_record_json(struct json_object * jsa, fru_mr_rec_t * rec)
+{
+	struct json_object * js_rec = json_object_new_object();
+
+	if (!js_rec)
+		fatal("Failed to create a new JSON object for MR record");
+
+	if (rec->type == FRU_MR_MGMT_ACCESS) {
+		fru_mr_mgmt_type_t subtype = rec->mgmt.subtype;
+		struct json_object * jsfield = NULL;
+		off_t idx = FRU_MR_MGMT_SUBTYPE_TO_IDX(subtype);
+		const char * recname = NULL;
+
+		if (idx < 0) {
+			json_object_put(js_rec);
+			fatal("Invalid management access record subtype %d", subtype);
+		}
+
+		recname = frugen_mr_mgmt_name[idx].json;
+
+		jsfield = json_object_new_string("management");
+		json_object_object_add(js_rec, "type", jsfield);
+
+		jsfield = json_object_new_string(recname);
+		json_object_object_add(js_rec, "subtype", jsfield);
+
+		jsfield = json_object_new_string(rec->mgmt.data);
+		json_object_object_add(js_rec, recname, jsfield);
+	}
+/* TODO: Add more MR types
+	else if (rec->type = ... ) {
+		// Add code here
+	}
+*/
+	else if (rec->type == FRU_MR_RAW) {
+		uint8_t raw_type = rec->raw.type;
+		struct json_object * jsfield = NULL;
+
+		jsfield = json_object_new_string("custom");
+		json_object_object_add(js_rec, "type", jsfield);
+
+		jsfield = json_object_new_int(raw_type);
+		json_object_object_add(js_rec, "custom_type", jsfield);
+
+		jsfield = json_object_new_string(rec->raw.data);
+		json_object_object_add(js_rec, "data", jsfield);
+	}
+
+	json_object_array_add(jsa, js_rec);
+}
+
+void add_mr_area_json(struct json_object * jso,
+                      const fru_t * fru)
+{
+	struct json_object * js_mr = json_object_new_array();
+	if (!js_mr)
+		fatal("Failed to allocate a new JSON array for multirecord area\n");
+
+	/* TODO: Add each MR record */
+	fru_mr_rec_t *rec = NULL;
+	size_t count = 0;
+	while (true) {
+		bool last = false;
+		fru_clearerr();
+		rec = fru_get_mr(fru, FRU_LIST_HEAD);
+		last = (fru_errno.code == FEMREND);
+
+		if (!rec) {
+			break;
+		}
+
+		add_mr_record_json(js_mr, rec);
+		count++;
+
+		if (last)
+			break;
+	}
+
+	if (count) {
+		json_object_object_add(jso, "multirecord", js_mr);
+		debug(2, "Added multirecord area to JSON");
+	}
+	else {
+		json_object_put(js_mr);
+	}
+
+}
+
 void save_to_json_file(FILE **fp, const char *fname,
-                       const struct frugen_fruinfo_s *info,
-                       const struct frugen_config_s *config)
+                       const fru_t * fru)
 {
 	struct json_object *json_root = json_object_new_object();
-	struct json_object *section = NULL, *temp_obj = NULL;
 
 	assert(fp);
+	assert(fru);
 
 	if (!*fp) {
 		*fp = fopen(fname, "w");
@@ -740,80 +764,40 @@ void save_to_json_file(FILE **fp, const char *fname,
 		fatal("Failed to open file '%s' for writing: %m", fname);
 	}
 
-	if (info->has_internal) {
-		section = json_object_new_string((char *)fru->internal_use);
-		json_object_object_add(json_root, "internal", section);
-	}
+	/* Write areas out in the requested order */
+	fru_area_type_t order;
+	FRU_FOREACH_AREA(order) {
+		fru_area_type_t atype = fru->order[order];
 
-	if (info->has_chassis) {
-		section = json_object_new_object();
-		temp_obj = json_object_new_int(fru->chassis.type);
-		json_object_object_add(section, "type", temp_obj);
-		json_object_add_with_type(section, "pn", fru->chassis.pn.val, fru->chassis.pn.type);
-		json_object_add_with_type(section, "serial", fru->chassis.serial.val, fru->chassis.serial.type);
-		temp_obj = json_object_new_array();
-		fru_reclist_t *next = fru->chassis.cust;
-		while (next != NULL) {
-			json_object_add_with_type(temp_obj, NULL, next->rec->val,
-									  next->rec->type);
-			next = next->next;
+		/* Skip disabled areas */
+		if (!fru->present[atype])
+			continue;
+
+		switch (atype) {
+		case FRU_INTERNAL_USE:
+			add_iu_area_json(json_root, fru->internal);
+			break;
+		case FRU_CHASSIS_INFO:
+		case FRU_BOARD_INFO:
+		case FRU_PRODUCT_INFO:
+			add_info_area_json(json_root, atype, fru);
+			break;
+		case FRU_MR:
+			add_mr_area_json(json_root, fru);
+			break;
+		default:
+			fatal("Invalid area (%d) in save order!", atype);
 		}
-		json_object_object_add(section, "custom", temp_obj);
-		json_object_object_add(json_root, "chassis", section);
 	}
 
-	if (info->has_product) {
-		section = json_object_new_object();
-		temp_obj = json_object_new_int(fru->product.lang);
-		json_object_object_add(section, "lang", temp_obj);
-		json_object_add_with_type(section, "mfg", fru->product.mfg.val, fru->product.mfg.type);
-		json_object_add_with_type(section, "pname", fru->product.pname.val, fru->product.pname.type);
-		json_object_add_with_type(section, "serial", fru->product.serial.val, fru->product.serial.type);
-		json_object_add_with_type(section, "pn", fru->product.pn.val, fru->product.pn.type);
-		json_object_add_with_type(section, "ver", fru->product.ver.val, fru->product.ver.type);
-		json_object_add_with_type(section, "atag", fru->product.atag.val, fru->product.atag.type);
-		json_object_add_with_type(section, "file", fru->product.file.val, fru->product.file.type);
-		temp_obj = json_object_new_array();
-		fru_reclist_t *next = fru->product.cust;
-		while (next != NULL) {
-			json_object_add_with_type(temp_obj, NULL, next->rec->val,
-									  next->rec->type);
-			next = next->next;
-		}
-		json_object_object_add(section, "custom", temp_obj);
-		json_object_object_add(json_root, "product", section);
-	}
-
-	if (info->has_board) {
-		char timebuf[DATEBUF_SZ] = {0};
-		tv_to_datestr(timebuf, &fru->board.tv);
-
-		section = json_object_new_object();
-		temp_obj = json_object_new_int(fru->board.lang);
-		json_object_object_add(section, "lang", temp_obj);
-		json_object_add_with_type(section, "date", timebuf, 0);
-		json_object_add_with_type(section, "mfg", fru->board.mfg.val, fru->board.mfg.type);
-		json_object_add_with_type(section, "pname", fru->board.pname.val, fru->board.pname.type);
-		json_object_add_with_type(section, "serial", fru->board.serial.val, fru->board.serial.type);
-		json_object_add_with_type(section, "pn", fru->board.pn.val, fru->board.pn.type);
-		json_object_add_with_type(section, "file", fru->board.file.val, fru->board.file.type);
-		temp_obj = json_object_new_array();
-		fru_reclist_t *next = fru->board.cust;
-		while (next != NULL) {
-			json_object_add_with_type(temp_obj, NULL, next->rec->val,
-									  next->rec->type);
-			next = next->next;
-		}
-		json_object_object_add(section, "custom", temp_obj);
-		json_object_object_add(json_root, "board", section);
-	}
-	if (info->has_multirec) {
-		json_object *jso = NULL;
-		json_from_mr_reclist(&jso, fru->mr_reclist, config->flags);
-		json_object_object_add(json_root, "multirecord", jso);
-	}
+	/* Write out the json tree to file */
 	json_object_to_fd(fileno(*fp), json_root,
-					  JSON_C_TO_STRING_PRETTY | JSON_C_TO_STRING_SPACED);
+	                  JSON_C_TO_STRING_PRETTY
+	                  | JSON_C_TO_STRING_SPACED
+	                  | JSON_C_TO_STRING_NOSLASHESCAPE
+	);
 	json_object_put(json_root);
+
+	return;
 }
-#endif
+
