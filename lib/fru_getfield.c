@@ -63,18 +63,12 @@ fru_field_t * fru_getfield(const fru_t * fru,
 		}
 	};
 
-	size_t field_count[FRU_INFO_AREAS] = {
-		[FRU_INFOIDX(CHASSIS)] = FRU_CHASSIS_FIELD_COUNT,
-		[FRU_INFOIDX(BOARD)] = FRU_BOARD_FIELD_COUNT,
-		[FRU_INFOIDX(PRODUCT)] = FRU_PROD_FIELD_COUNT,
-	};
-
-	off_t infoidx = FRU_ATYPE_TO_INFOIDX(atype);
-	if (index >= field_count[infoidx]) {
+	if (index >= fru__fieldcount[atype]) {
 		fru__seterr(FENOFIELD, atype, index);
 		goto out;
 	}
 
+	off_t infoidx = FRU_ATYPE_TO_INFOIDX(atype);
 	field = fields[infoidx][index];
 out:
 	return (fru_field_t *)field;

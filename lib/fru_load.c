@@ -321,11 +321,6 @@ bool decode_info_area(fru_t * fru,
 			&fru->product.file,
 		}
 	};
-	size_t field_count[FRU_TOTAL_AREAS] = {
-		[FRU_CHASSIS_INFO] = FRU_CHASSIS_FIELD_COUNT,
-		[FRU_BOARD_INFO] = FRU_BOARD_FIELD_COUNT,
-		[FRU_PRODUCT_INFO] = FRU_PROD_FIELD_COUNT,
-	};
 
 	DEBUG("Decoding area type %d", atype);
 
@@ -383,7 +378,7 @@ bool decode_info_area(fru_t * fru,
 			return false;
 	}
 
-	for (size_t i = 0; i < field_count[atype]; i++) {
+	for (size_t i = 0; i < fru__fieldcount[atype]; i++) {
 		if (!fru__decode_field(out_field[atype][i], field)) {
 			fru_errno.src = (fru_error_source_t)atype;
 			fru_errno.index = i;

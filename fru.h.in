@@ -549,6 +549,9 @@ typedef struct {
 	              */
 } fru_t;
 
+/** Check if the area has a 'type' field */
+#define FRU_ATYPE_HAS_TYPE(atype) (FRU_CHASSIS_INFO == (atype))
+/** Check if the area has a 'lang' field */
 #define FRU_ATYPE_HAS_LANG(atype) (FRU_BOARD_INFO == (atype) || FRU_PRODUCT_INFO == (atype))
 
 /**
@@ -1438,6 +1441,10 @@ fru_mr_rec_t * fru_add_mr(fru_t * fru, size_t index, fru_mr_rec_t * rec);
  *
  * Finds the record at the given index in the MultiRecord area
  * and returns a pointer to it or \a NULL if not found.
+ *
+ * If the requested \a index is the last one, then along with
+ * returning a valid pointer to the entry at that index, the function
+ * will also set \ref fru_errno.code to \ref FEMREND.
  *
  * \b Hint
  *
