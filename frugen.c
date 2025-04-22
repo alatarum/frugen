@@ -39,6 +39,200 @@
 
 volatile int debug_level = 0;
 
+/* Options are sorted by .val */
+static const struct option options[] = {
+	/* Set board date */
+	{ .name = "board-date",    .val = 'd', .has_arg = required_argument },
+
+	/* Set debug flags */
+	{ .name = "debug",         .val = 'g', .has_arg = required_argument },
+
+	/* Display usage help */
+	{ .name = "help",          .val = 'h', .has_arg = optional_argument },
+
+#ifdef __HAS_JSON__
+	/* Set input file format to JSON */
+	{ .name = "json",          .val = 'j', .has_arg = required_argument },
+#endif
+
+	/* Set the output data format */
+	{ .name = "out-format",    .val = 'o', .has_arg = required_argument },
+
+	/* Set input file format to raw binary */
+	{ .name = "raw",          .val = 'r', .has_arg = required_argument },
+
+	/* Set data and optionally type of encoding for a FRU field */
+	{ .name = "set",          .val = 's', .has_arg = required_argument },
+
+	/* Non-string fields for areas */
+	{ .name = "chassis-type",  .val = 't', .has_arg = required_argument },
+	{ .name = "board-date-unspec", .val = 'u', .has_arg = no_argument },
+
+	/* MultiRecord area options */
+	{ .name = "mr-uuid",       .val = 'U', .has_arg = required_argument },
+
+	/* Increase verbosity */
+	{ .name = "verbose",       .val = 'v', .has_arg = no_argument },
+
+	/* Increase verbosity */
+	{ .name = "version",       .val = 'V', .has_arg = no_argument },
+};
+
+/* Sorted by index */
+static const char * const option_help[] = {
+	['d'] = "Set board manufacturing date/time, use \"DD/MM/YYYY HH:MM\" format.\n\t\t"
+			"By default the current system date/time is used unless -u is specified",
+	['g'] = "Set debug flag (use multiple times for multiple flags):\n\t\t"
+			"\tfver  - Ignore wrong version in FRU header\n\t\t"
+			"\taver  - Ignore wrong version in area headers\n\t\t"
+			"\trver  - Ignore wrong record version in multirecord area\n\t\t"
+			"\tasum  - Ignore wrong area checksum (for standard areas)\n\t\t"
+			"\trhsum - Ignore wrong record header checksum (for multirecord)\n\t\t"
+			"\trdsum - Ignore wrong record data checksum (for multirecord)\n\t\t"
+			"\trdlen - Ignore wrong record data size (for multirecord)\n\t\t"
+			"\taeof  - Ignore missing end-of-field in info areas, try to decode till the end\n\t\t"
+			"\treol  - Ignore missing EOL record, use any found records",
+	['h'] = "Display this help. Use any option name as an argument to show\n\t\t"
+			"help for a single option.\n"
+			"\n\t\t"
+			"Examples:\n\t\t"
+			"\tfrugen -h     # Show full program help\n\t\t"
+			"\tfrugen -hhelp # Help for long option '--help'\n\t\t"
+			"\tfrugen -hh    # Help for short option '-h'",
+	['j'] = "Load FRU information from a JSON file, use '-' for stdin",
+	['o'] = "Output format, one of:\n"
+			"\t\tbinary - Default format when writing to a file.\n"
+			"\t\t         For stdout, the following will be used, even\n"
+			"\t\t         if 'binary' is explicitly specified:\n"
+#ifdef __HAS_JSON__
+			"\t\tjson   - Default when writing to stdout.\n"
+#endif
+			"\t\ttext   - Plain text format, no decoding of MR area records"
+#ifndef __HAS_JSON__
+			".\n\t\t         Default format when writing to stdout"
+#endif
+			,
+	['r'] = "Load FRU information from a raw binary file, use '-' for stdin",
+	['s'] = "Set a text field in an area to the given value, use given encoding\n\t\t"
+			"Requires an argument in form [<encoding>:]<area>.<field>=<value>\n\t\t"
+			"If an encoding is not specified at all, frugen will attempt to\n\t\t"
+			"preserve the encoding specified in the template or will use 'auto'\n\t\t"
+			"if none is set there. To force 'auto' encoding you may either\n\t\t"
+			"specify it explicitly or use a bare ':' without any preceding text.\n"
+			"\n\t\t"
+			"Supported encodings:\n\t\t"
+			"\tauto      - Autodetect encoding based on the used characters.\n\t\t"
+			"\t            This will attempt to use the most compact encoding\n\t\t"
+			"\t            among the following.\n\t\t"
+			"\t6bitascii - 6-bit ASCII, available characters:\n\t\t"
+			"\t             !\"#$%^&'()*+,-./\n\t\t"
+			"\t            1234567890:;<=>?\n\t\t"
+			"\t            @ABCDEFGHIJKLMNO\n\t\t"
+			"\t            PQRSTUVWXYZ[\\]^_\n\t\t"
+			"\tbcdplus   - BCD+, available characters:\n\t\t"
+			"\t            01234567890 -.\n\t\t"
+			"\ttext      - Plain text (Latin alphabet only).\n\t\t"
+			"\t            Characters: Any printable 8-bit ASCII byte.\n\t\t"
+			"\tbinary    - Binary data represented as a hex string.\n\t\t"
+			"\t            Characters: 0123456789ABCDEFabcdef\n"
+			"\n\t\t"
+			"For area and field names, please refer to example.json\n"
+			"\n\t\t"
+			"You may specify field name 'custom' to add a new custom field.\n\t\t"
+			"Alternatively, you may specify field name 'custom.<N>' to\n\t\t"
+			"replace the value of the custom field number N given in the\n\t\t"
+			"input template file.\n"
+			"\n\t\t"
+			"Examples:\n"
+			"\n\t\t"
+			"\tfrugen -r fru-template.bin -s text:board.pname=\"MY BOARD\" out.fru\n\t\t"
+			"\t\t# (encode board.pname as text)\n\t\t"
+			"\tfrugen -r fru-template.bin -s board.pname=\"MY BOARD\" out.fru\n\t\t"
+			"\t\t# (preserve original encoding type if possible)\n\t\t"
+			"\tfrugen -r fru-template.bin -s :board.pname=\"MY BOARD\" out.fru\n\t\t"
+			"\t\t# (auto-encode board.pname as 6-bit ASCII)\n\t\t"
+			"\tfrugen -j fru-template.json -s binary:board.custom=0102DEADBEEF out.fru\n\t\t"
+			"\t\t# (add a new binary-encoded custom field to board)\n\t\t"
+			"\tfrugen -j fru-template.json -s binary:board.custom.2=0102DEADBEEF out.fru\n\t\t"
+			"\t\t# (replace custom field 2 in board with new value)",
+	/* Chassis info area related options */
+	['t'] = "Set chassis type (hex). Defaults to 0x02 ('Unknown')",
+	['u'] = "Don't use current system date/time for board mfg. date, use 'Unspecified'",
+	/* MultiRecord area related options */
+	['U'] = "Add/update a System Unique ID (UUID/GUID) record in MR area",
+	['v'] = "Increase program verbosity (debug) level",
+	['V'] = "Show the program version",
+};
+
+/**
+ * Show either the full help message, or a just the version info
+ */
+void show_help(bool full, const char * optarg)
+{
+	printf("FRU Generator v%s (C) %s, "
+		   "Alexander Amelkin <alexander@amelkin.msk.ru>\n",
+		   VERSION, COPYRIGHT_YEARS);
+	if (!full)
+		exit(0);
+
+	printf("\n"
+		   "Usage: frugen [options] <filename>\n"
+		   "\n"
+		   "Options:\n\n");
+
+	size_t i;
+	bool single_option_help = false;
+	for (i = 0; i < FRU_ARRAY_SZ(options); i++) {
+		if (optarg) {
+			single_option_help = true;
+			if ((optarg[1] || optarg[0] != options[i].val)
+				&& strcmp(optarg, options[i].name))
+			{
+				// Only show help for the option given in optarg
+				continue;
+			}
+		}
+		printf("\t-%c%s, --%s%s\n" /* "\t-%c%s\n" */,
+			   options[i].val,
+			   options[i].has_arg
+			   ? (options[i].has_arg == optional_argument)
+				 ? "[<argument>]"
+				 : " <argument>"
+			   : "",
+			   options[i].name,
+			   options[i].has_arg
+			   ? (options[i].has_arg == optional_argument)
+				 ? "[=<argument>]"
+				 : " <argument>"
+			   : "");
+		printf("\t\t%s.\n\n", option_help[options[i].val]);
+		if (single_option_help)
+			exit(0);
+	}
+	if (single_option_help && i == FRU_ARRAY_SZ(options)) {
+		fatal("No such option '%s'\n", optarg);
+	}
+	printf("Example (encode from scratch):\n"
+		   "\tfrugen -s board.mfg=\"Biggest International Corp.\" \\\n"
+		   "\t       --set board.pname=\"Some Cool Product\" \\\n"
+		   "\t       --set text:board.pn=\"BRD-PN-123\" \\\n"
+		   "\t       --board-date \"10/1/2017 12:58:00\" \\\n"
+		   "\t       --set board.serial=\"01171234\" \\\n"
+		   "\t       --set board.file=\"Command Line\" \\\n"
+		   "\t       --set binary:board.custom=\"01020304FEAD1E\" \\\n"
+		   "\t       fru.bin\n"
+		   "\n");
+	printf("Example (decode to json, output to stdout):\n"
+		   "\tfrugen --raw fru.bin -o json -\n"
+		   "\n");
+	printf("Example (modify binary file):\n"
+		   "\tfrugen --raw fru.bin \\\n"
+		   "\t       --set text:board.serial=123456789 \\\n"
+		   "\t       --set text:board.custom.1=\"My custom field\" \\\n"
+		   "\t       fru.bin\n");
+	exit(0);
+}
+
 const frugen_name_t chassis_fields[FRU_CHASSIS_FIELD_COUNT] = {
 	[FRU_CHASSIS_PARTNO] = { "pn", "Part Number" },
 	[FRU_CHASSIS_SERIAL] = { "serial", "Serial Number" },
@@ -764,7 +958,6 @@ int main(int argc, char * argv[])
 	FILE * fp = NULL;
 	int opt;
 	int lindex;
-	bool single_option_help = false;
 	fieldopt_t fieldopt = {};
 
 	// Prevent intermixing of stderr and stdout outputs
@@ -784,127 +977,6 @@ int main(int argc, char * argv[])
 	fru->product.lang = FRU_LANG_ENGLISH;
 
 	const char * fname = NULL;
-
-	/* Options are sorted by .val */
-	struct option options[] = {
-		/* Set board date */
-		{ .name = "board-date",    .val = 'd', .has_arg = required_argument },
-
-		/* Set debug flags */
-		{ .name = "debug",         .val = 'g', .has_arg = required_argument },
-
-		/* Display usage help */
-		{ .name = "help",          .val = 'h', .has_arg = optional_argument },
-
-#ifdef __HAS_JSON__
-		/* Set input file format to JSON */
-		{ .name = "json",          .val = 'j', .has_arg = required_argument },
-#endif
-
-		/* Set the output data format */
-		{ .name = "out-format",    .val = 'o', .has_arg = required_argument },
-
-		/* Set input file format to raw binary */
-		{ .name = "raw",          .val = 'r', .has_arg = required_argument },
-
-		/* Set data and optionally type of encoding for a FRU field */
-		{ .name = "set",          .val = 's', .has_arg = required_argument },
-
-		/* Non-string fields for areas */
-		{ .name = "chassis-type",  .val = 't', .has_arg = required_argument },
-		{ .name = "board-date-unspec", .val = 'u', .has_arg = no_argument },
-
-		/* MultiRecord area options */
-		{ .name = "mr-uuid",       .val = 'U', .has_arg = required_argument },
-
-		/* Increase verbosity */
-		{ .name = "verbose",       .val = 'v', .has_arg = no_argument },
-	};
-
-	/* Sorted by index */
-	const char * option_help[] = {
-		['d'] = "Set board manufacturing date/time, use \"DD/MM/YYYY HH:MM\" format.\n\t\t"
-		        "By default the current system date/time is used unless -u is specified",
-		['g'] = "Set debug flag (use multiple times for multiple flags):\n\t\t"
-		        "\tfver  - Ignore wrong version in FRU header\n\t\t"
-			    "\taver  - Ignore wrong version in area headers\n\t\t"
-			    "\trver  - Ignore wrong record version in multirecord area\n\t\t"
-			    "\tasum  - Ignore wrong area checksum (for standard areas)\n\t\t"
-			    "\trhsum - Ignore wrong record header checksum (for multirecord)\n\t\t"
-			    "\trdsum - Ignore wrong record data checksum (for multirecord)\n\t\t"
-			    "\trdlen - Ignore wrong record data size (for multirecord)\n\t\t"
-			    "\taeof  - Ignore missing end-of-field in info areas, try to decode till the end\n\t\t"
-			    "\treol  - Ignore missing EOL record, use any found records",
-		['h'] = "Display this help. Use any option name as an argument to show\n\t\t"
-		        "help for a single option.\n"
-				"\n\t\t"
-				"Examples:\n\t\t"
-				"\tfrugen -h     # Show full program help\n\t\t"
-				"\tfrugen -hhelp # Help for long option '--help'\n\t\t"
-				"\tfrugen -hh    # Help for short option '-h'",
-		['j'] = "Load FRU information from a JSON file, use '-' for stdin",
-		['o'] = "Output format, one of:\n"
-		        "\t\tbinary - Default format when writing to a file.\n"
-		        "\t\t         For stdout, the following will be used, even\n"
-		        "\t\t         if 'binary' is explicitly specified:\n"
-#ifdef __HAS_JSON__
-		        "\t\tjson   - Default when writing to stdout.\n"
-#endif
-		        "\t\ttext   - Plain text format, no decoding of MR area records"
-#ifndef __HAS_JSON__
-		        ".\n\t\t         Default format when writing to stdout"
-#endif
-		        ,
-		['r'] = "Load FRU information from a raw binary file, use '-' for stdin",
-		['s'] = "Set a text field in an area to the given value, use given encoding\n\t\t"
-		        "Requires an argument in form [<encoding>:]<area>.<field>=<value>\n\t\t"
-				"If an encoding is not specified at all, frugen will attempt to\n\t\t"
-				"preserve the encoding specified in the template or will use 'auto'\n\t\t"
-				"if none is set there. To force 'auto' encoding you may either\n\t\t"
-				"specify it explicitly or use a bare ':' without any preceding text.\n"
-			    "\n\t\t"
-		        "Supported encodings:\n\t\t"
-				"\tauto      - Autodetect encoding based on the used characters.\n\t\t"
-				"\t            This will attempt to use the most compact encoding\n\t\t"
-				"\t            among the following.\n\t\t"
-		        "\t6bitascii - 6-bit ASCII, available characters:\n\t\t"
-				"\t             !\"#$%^&'()*+,-./\n\t\t"
-				"\t            1234567890:;<=>?\n\t\t"
-				"\t            @ABCDEFGHIJKLMNO\n\t\t"
-				"\t            PQRSTUVWXYZ[\\]^_\n\t\t"
-				"\tbcdplus   - BCD+, available characters:\n\t\t"
-				"\t            01234567890 -.\n\t\t"
-				"\ttext      - Plain text (Latin alphabet only).\n\t\t"
-				"\t            Characters: Any printable 8-bit ASCII byte.\n\t\t"
-				"\tbinary    - Binary data represented as a hex string.\n\t\t"
-				"\t            Characters: 0123456789ABCDEFabcdef\n"
-				"\n\t\t"
-				"For area and field names, please refer to example.json\n"
-				"\n\t\t"
-				"You may specify field name 'custom' to add a new custom field.\n\t\t"
-				"Alternatively, you may specify field name 'custom.<N>' to\n\t\t"
-				"replace the value of the custom field number N given in the\n\t\t"
-				"input template file.\n"
-				"\n\t\t"
-				"Examples:\n"
-				"\n\t\t"
-				"\tfrugen -r fru-template.bin -s text:board.pname=\"MY BOARD\" out.fru\n\t\t"
-				"\t\t# (encode board.pname as text)\n\t\t"
-				"\tfrugen -r fru-template.bin -s board.pname=\"MY BOARD\" out.fru\n\t\t"
-				"\t\t# (preserve original encoding type if possible)\n\t\t"
-				"\tfrugen -r fru-template.bin -s :board.pname=\"MY BOARD\" out.fru\n\t\t"
-				"\t\t# (auto-encode board.pname as 6-bit ASCII)\n\t\t"
-				"\tfrugen -j fru-template.json -s binary:board.custom=0102DEADBEEF out.fru\n\t\t"
-				"\t\t# (add a new binary-encoded custom field to board)\n\t\t"
-				"\tfrugen -j fru-template.json -s binary:board.custom.2=0102DEADBEEF out.fru\n\t\t"
-				"\t\t# (replace custom field 2 in board with new value)",
-		/* Chassis info area related options */
-		['t'] = "Set chassis type (hex). Defaults to 0x02 ('Unknown')",
-		['u'] = "Don't use current system date/time for board mfg. date, use 'Unspecified'",
-		/* MultiRecord area related options */
-		['U'] = "Add/update a System Unique ID (UUID/GUID) record in MR area",
-		['v'] = "Increase program verbosity (debug) level",
-	};
 
 	char optstring[FRU_ARRAY_SZ(options) * 2 + 1] = {0};
 
@@ -926,6 +998,10 @@ int main(int argc, char * argv[])
 				debug_level++;
 				debug(debug_level, "Verbosity level set to %d", debug_level);
 				break;
+			case 'V': // Version
+				show_help(false, NULL);
+				break;
+
 			case 'g': { // debug flag
 				struct {
 					const char * name;
@@ -955,62 +1031,7 @@ int main(int argc, char * argv[])
 				break;
 			}
 			case 'h': // help
-				printf("FRU Generator v%s (C) %s, "
-					   "Alexander Amelkin <alexander@amelkin.msk.ru>\n",
-					   VERSION, COPYRIGHT_YEARS);
-				printf("\n"
-					   "Usage: frugen [options] <filename>\n"
-					   "\n"
-					   "Options:\n\n");
-				for (i = 0; i < FRU_ARRAY_SZ(options); i++) {
-					if (optarg) {
-						single_option_help = true;
-						if ((optarg[1] || optarg[0] != options[i].val)
-							&& strcmp(optarg, options[i].name))
-						{
-							// Only show help for the option given in optarg
-							continue;
-						}
-					}
-					printf("\t-%c%s, --%s%s\n" /* "\t-%c%s\n" */,
-						   options[i].val,
-						   options[i].has_arg
-						   ? (options[i].has_arg == optional_argument)
-						     ? "[<argument>]"
-						     : " <argument>"
-						   : "",
-						   options[i].name,
-						   options[i].has_arg
-						   ? (options[i].has_arg == optional_argument)
-						     ? "[=<argument>]"
-						     : " <argument>"
-						   : "");
-					printf("\t\t%s.\n\n", option_help[options[i].val]);
-					if (single_option_help)
-						exit(0);
-				}
-				if (single_option_help && i == FRU_ARRAY_SZ(options)) {
-					fatal("No such option '%s'\n", optarg);
-				}
-				printf("Example (encode from scratch):\n"
-					   "\tfrugen -s board.mfg=\"Biggest International Corp.\" \\\n"
-					   "\t       --set board.pname=\"Some Cool Product\" \\\n"
-					   "\t       --set text:board.pn=\"BRD-PN-123\" \\\n"
-					   "\t       --board-date \"10/1/2017 12:58:00\" \\\n"
-					   "\t       --set board.serial=\"01171234\" \\\n"
-					   "\t       --set board.file=\"Command Line\" \\\n"
-					   "\t       --set binary:board.custom=\"01020304FEAD1E\" \\\n"
-					   "\t       fru.bin\n"
-					   "\n");
-				printf("Example (decode to json, output to stdout):\n"
-					   "\tfrugen --raw fru.bin -o json -\n"
-					   "\n");
-				printf("Example (modify binary file):\n"
-					   "\tfrugen --raw fru.bin \\\n"
-					   "\t       --set text:board.serial=123456789 \\\n"
-					   "\t       --set text:board.custom.1=\"My custom field\" \\\n"
-					   "\t       fru.bin\n");
-				exit(0);
+				show_help(true, optarg);
 				break;
 
 #ifdef __HAS_JSON__

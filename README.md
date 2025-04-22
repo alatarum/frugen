@@ -176,25 +176,27 @@ For the most up-to-date information on the frugen tool invocation and options, p
 use `frugen -h`, below is an example of the output of that command:
 
 ```
-FRU Generator v2.0.0.gXXXXXXX (C) 2016-2024, Alexander Amelkin <alexander@amelkin.msk.ru>
+FRU Generator v3.0.0.gXXXXXXX (C) 2016-2025, Alexander Amelkin <alexander@amelkin.msk.ru>
 
 Usage: frugen [options] <filename>
 
 Options:
 
 	-d <argument>, --board-date <argument>
-		Set board manufacturing date/time, use "DD/MM/YYYY HH:MM:SS" format.
+		Set board manufacturing date/time, use "DD/MM/YYYY HH:MM" format.
 		By default the current system date/time is used unless -u is specified.
 
 	-g <argument>, --debug <argument>
 		Set debug flag (use multiple times for multiple flags):
 			fver  - Ignore wrong version in FRU header
 			aver  - Ignore wrong version in area headers
-			rver  - Ignore wrong verison in multirecord area record version
+			rver  - Ignore wrong record version in multirecord area
 			asum  - Ignore wrong area checksum (for standard areas)
 			rhsum - Ignore wrong record header checksum (for multirecord)
-			rdsum - Ignore wrong data checksum (for multirecord)
-			rend  - Ignore missing EOL record, use any found records.
+			rdsum - Ignore wrong record data checksum (for multirecord)
+			rdlen - Ignore wrong record data size (for multirecord)
+			aeof  - Ignore missing end-of-field in info areas, try to decode till the end
+			reol  - Ignore missing EOL record, use any found records.
 
 	-h[<argument>], --help[=<argument>]
 		Display this help. Use any option name as an argument to show
@@ -270,10 +272,13 @@ Options:
 		Don't use current system date/time for board mfg. date, use 'Unspecified'.
 
 	-U <argument>, --mr-uuid <argument>
-		Add/update a System Unique ID (UUID/GUID) record in MR area
+		Add/update a System Unique ID (UUID/GUID) record in MR area.
 
 	-v, --verbose
 		Increase program verbosity (debug) level.
+
+	-V, --version
+		Show the program version.
 
 Example (encode from scratch):
 	frugen -s board.mfg="Biggest International Corp." \
