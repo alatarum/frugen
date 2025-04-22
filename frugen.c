@@ -104,7 +104,7 @@ const char * frugen_enc_name_by_val(fru_field_enc_t enc)
 fru_field_enc_t frugen_enc_by_name(const char * name)
 {
 	debug(4, "Looking for encoding '%s'", name);
-	for (fru_field_enc_t i = FRU_FE_MIN; i <= FRU_FE_MAX; i++) {
+	for (fru_field_enc_t i = 0; i <= FRU_FE_AUTO; i++) {
 		if (!strcmp(name, frugen_enc_names[i])) {
 			debug(4, "Encoding '%s' is definitely %d", name, i);
 			return i;
@@ -149,10 +149,10 @@ out:
 
 const frugen_name_t * frugen_mr_mgmt_name_by_type(fru_mr_mgmt_type_t type)
 {
-	off_t i = FRU_MR_MGMT_SUBTYPE_TO_IDX(type);
-	if (!FRU_MR_MGMT_IS_SUBTYPE_VALID(i)) {
+	if (!FRU_MR_MGMT_IS_SUBTYPE_VALID(type)) {
 		fatal("FRU MR Management Record type %d is out of range", type);
 	}
+	off_t i = FRU_MR_MGMT_SUBTYPE_TO_IDX(type);
 	return &frugen_mr_mgmt_name[i];
 }
 

@@ -192,7 +192,6 @@ out:
 
 static
 bool load_mr_mgmt_record(fru_t * fru,
-                         size_t i,
                          json_object * item)
 {
 	bool rc = false;
@@ -206,12 +205,12 @@ bool load_mr_mgmt_record(fru_t * fru,
 		goto out;
 	}
 
-	debug(3, "Management record %zu subtype is '%s'", i, subtype);
+	debug(3, "Management record subtype is '%s'", subtype);
 	subtype_id = frugen_mr_mgmt_type_by_name(subtype);
 	if (!FRU_MR_MGMT_IS_SUBTYPE_VALID(subtype_id))
 		goto out;
 
-	debug(3, "Management record %zu subtype ID is '%d'", i, subtype_id);
+	debug(3, "Management record subtype ID is '%d'", subtype_id);
 
 	fru_mr_rec_t mr_rec = {};
 
@@ -220,13 +219,13 @@ bool load_mr_mgmt_record(fru_t * fru,
 
 	json_object_object_get_ex(item, subtype, &ifield);
 	if (!ifield) {
-		warn("Field '%s' not found for record %zu data", subtype, i);
+		warn("Field '%s' not found for record data", subtype);
 		goto out;
 	}
 
 	const char * field_data = json_object_get_string(ifield);
 	if (!field_data) {
-		warn("Field '%s' is not a string for MR record %zu", subtype, i);
+		warn("Field '%s' is not a string for MR record", subtype);
 		goto out;
 	}
 	strncpy(mr_rec.mgmt.data,
@@ -238,7 +237,7 @@ bool load_mr_mgmt_record(fru_t * fru,
 
 	/* Always add to the tail, one by one, sparse addition is not supported */
 	if (!fru_add_mr(fru, FRU_LIST_TAIL, &mr_rec)) {
-		fru_warn("Failed to add MR management record %zu", i);
+		fru_warn("Failed to add MR management record");
 		goto out;
 	}
 
@@ -249,7 +248,64 @@ out:
 }
 
 static
-bool load_mr_record(fru_t * fru, size_t i, json_object * item)
+bool load_mr_raw_record(fru_t * fru,
+                        json_object * item)
+{
+	json_object *ifield;
+	bool rc = false;
+
+	debug(1, "Found a custom MR record");
+	int32_t custom_type = FRU_MR_EMPTY;
+	json_object_object_get_ex(item, "custom_type", &ifield);
+	if (!ifield) {
+		warn("Each custom MR record must have "
+		     "a 'custom_type' (0...255)");
+		goto out;
+	}
+
+	custom_type = json_object_get_int(ifield);
+	if (!FRU_MR_IS_VALID_TYPE(custom_type)) {
+		warn("Custom type %" PRIi32 " for record "
+		     "is out of range (0...255)",
+		     custom_type);
+		goto out;
+	}
+
+	const char *hexstr = NULL;
+	json_object_object_get_ex(item, "data", &ifield);
+	hexstr = json_object_get_string(ifield);
+	if (!ifield || !hexstr) {
+		warn("A custom MR record must have 'data' "
+		     "field with a hex string");
+	}
+
+	fru_mr_rec_t mr_rec = {
+		.type = FRU_MR_RAW,
+		.raw.type = custom_type,
+	};
+
+	strncpy(mr_rec.raw.data,
+		hexstr,
+		FRU_MIN(sizeof(mr_rec.raw.data) - 1,
+			strlen(hexstr)
+		)
+	);
+
+	/* Always add to the tail, one by one, sparse addition is not supported */
+	if (!fru_add_mr(fru, FRU_LIST_TAIL, &mr_rec)) {
+		fru_warn("Failed to add a custom MR record");
+		goto out;
+	}
+
+	debug(2, "Custom MR data loaded from JSON: %s", hexstr);
+	rc = true;
+out:
+	return rc;
+}
+
+static
+bool load_mr_record(fru_t * fru,
+                    struct json_object * item)
 {
 	bool rc = false;
 
@@ -262,70 +318,30 @@ bool load_mr_record(fru_t * fru, size_t i, json_object * item)
 		goto out;
 	}
 
+	struct recloader {
+		const char * const typename;
+		bool (*func)(fru_t *, struct json_object *);
+	} record_loader[] = {
+		{ "management", load_mr_mgmt_record },
+//		{ "psu", load_mr_psu_record }, // TODO: Not supported yet
+		{ "custom", load_mr_raw_record },
+	};
+
 	debug(3, "Record is of type '%s'", type);
-	if (!strcmp(type, "management")) {
-		if (!load_mr_mgmt_record(fru, i, item)) {
-			goto out;
+	size_t i = 0;
+	for (; i < FRU_ARRAY_SZ(record_loader); i++) {
+		if (!strcmp(type, record_loader[i].typename)) {
+			if (!record_loader[i].func(fru, item))
+				goto out;
+			else
+				break;
 		}
 	}
-	else if (!strcmp(type, "custom")) {
-		debug(1, "Found a custom MR record");
-		int32_t custom_type = FRU_MR_EMPTY;
-		json_object_object_get_ex(item, "custom_type", &ifield);
-		if (!ifield) {
-			warn("Each custom MR record must have "
-			     "a 'custom_type' (0...255)");
-			goto out;
-		}
 
-		custom_type = json_object_get_int(ifield);
-		if (!FRU_MR_IS_VALID_TYPE(custom_type)) {
-			warn("Custom type %" PRIi32 " for record %zu "
-			     "is out of range (0...255)",
-			     custom_type, i);
-			goto out;
-		}
-
-		const char *hexstr = NULL;
-		json_object_object_get_ex(item, "data", &ifield);
-		hexstr = json_object_get_string(ifield);
-		if (!ifield || !hexstr) {
-			warn("A custom MR record %zu must have 'data' "
-			     "field with a hex string", i);
-		}
-
-		fru_mr_rec_t mr_rec = {
-			.type = FRU_MR_RAW,
-			.raw.type = custom_type,
-		};
-
-		strncpy(mr_rec.raw.data,
-			hexstr,
-			FRU_MIN(sizeof(mr_rec.raw.data) - 1,
-				strlen(hexstr)
-			)
-		);
-
-		/* Always add to the tail, one by one, sparse addition is not supported */
-		if (!fru_add_mr(fru, FRU_LIST_TAIL, &mr_rec)) {
-			fru_warn("Failed to add a custom MR record");
-			goto out;
-		}
-
-		debug(2, "Custom MR data loaded from JSON: %s", hexstr);
-	}
-/* TODO Fix this */
-#if 0
-	else if (!strcmp(type, "psu")) {
-		debug(1, "Found a PSU info record (not yet supported, skipped)");
-		continue;
-	}
-#endif
-	else {
+	if (i == FRU_ARRAY_SZ(record_loader)) {
 		warn("Multirecord type '%s' is not supported in JSON", type);
 		goto out;
 	}
-
 
 	rc = true;
 out:
@@ -357,7 +373,7 @@ bool load_mr_area(fru_t * fru, json_object * jso)
 			continue;
 
 		debug(3, "Parsing record #%zu/%zu", i + 1, alen);
-		if (!load_mr_record(fru, i, item)) {
+		if (!load_mr_record(fru, item)) {
 			warn("Failed to load MR record #%zu from JSON", i);
 			goto out;
 		}
@@ -718,7 +734,7 @@ void add_mr_area_json(struct json_object * jso,
 	if (!js_mr)
 		fatal("Failed to allocate a new JSON array for multirecord area\n");
 
-	/* TODO: Add each MR record */
+	/* Add each MR record */
 	fru_mr_rec_t *rec = NULL;
 	size_t count = 0;
 	while (true) {
