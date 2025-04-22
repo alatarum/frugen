@@ -201,7 +201,15 @@ Options:
 
 	-d <argument>, --board-date <argument>
 		Set board manufacturing date/time, use "DD/MM/YYYY HH:MM" format.
-		By default the current system date/time is used unless -u is specified.
+		By default the resulting output depends on the ouput format and
+		presence of '-u' option as follows:
+
+		-o     | -u specified         | -u not specified
+		-------|----------------------|-------------------------
+		binary | set to 'unspecified' | current system date/time
+		json   | not included         | "auto"
+		text   | "Unspecified"        | "Unspecified (auto)"
+		-------|----------------------|-------------------------.
 
 	-g <argument>, --debug <argument>
 		Set debug flag (use multiple times for multiple flags):

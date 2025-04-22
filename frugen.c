@@ -81,7 +81,15 @@ static const struct option options[] = {
 /* Sorted by index */
 static const char * const option_help[] = {
 	['d'] = "Set board manufacturing date/time, use \"DD/MM/YYYY HH:MM\" format.\n\t\t"
-	        "By default the current system date/time is used unless -u is specified",
+	        "By default the resulting output depends on the ouput format and\n\t\t"
+	        "presence of '-u' option as follows:\n\t\t"
+	        "\n\t\t"
+	        "-o     | -u specified         | -u not specified\n\t\t"
+	        "-------|----------------------|-------------------------\n\t\t"
+	        "binary | set to 'unspecified' | current system date/time\n\t\t"
+	        "json   | not included         | \"auto\"\n\t\t"
+	        "text   | \"Unspecified\"        | \"Unspecified (auto)\"\n\t\t"
+	        "-------|----------------------|-------------------------",
 	['g'] = "Set debug flag (use multiple times for multiple flags):\n\t\t"
 	        "\tfver  - Ignore wrong version in FRU header\n\t\t"
 	        "\taver  - Ignore wrong version in area headers\n\t\t"
