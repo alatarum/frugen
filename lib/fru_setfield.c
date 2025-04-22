@@ -67,6 +67,7 @@ bool fru__hexstr2bin(void * out,
 	}
 	DEBUG("Done converting at %p", out + *outsize);
 	if (*outsize && size == *outsize && ptr[0]) {
+		// Indicate truncation, don't bail out
 		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 	}
 	else if (ptr[0]) {
@@ -144,6 +145,7 @@ bool encode_6bit(fru__file_field_t * out,
 	size_t i, i6;
 
 	if (len6bit > FRU__FIELDLEN(len6bit)) {
+		// Indicate truncation, don't bail out
 		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 		len6bit = FRU__FIELDLEN(len6bit); // Truncate to fit
 	}
@@ -214,6 +216,7 @@ bool encode_bcdplus(fru__file_field_t * out,
 
 	if (lenbcd > FRU__FIELDLEN(lenbcd))
 	{
+		// Indicate truncation, don't bail out
 		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 		lenbcd = FRU__FIELDLEN(lenbcd); // Truncate to fit
 	}
@@ -277,6 +280,7 @@ bool encode_text(fru__file_field_t * out,
 
 	fru_clearerr();
 	if (len > FRU__FIELDLEN(len)) {
+		// Indicate truncation, don't bail out
 		fru__seterr(FE2BIG, FERR_LOC_GENERAL, -1);
 		len = FRU__FIELDLEN(len); // Truncate to fit
 	}

@@ -606,9 +606,9 @@ typedef enum {
  *
  * If the encoding attempt succeeds, the input string and the requested
  * encoding value will be copied into the given \a field. The string will be
- * truncated to fit and the truncation event will be indicated via \ref
- * fru_errno as \ref FELONGINPUT along with success return code. Please set
- * \ref fru_errno to 0 before the call to avoid false positive checks for
+ * truncated to fit and the truncation event will be indicated via
+ * \ref fru_errno.code as \ref FE2BIG along with success return code. Please
+ * call \ref fru_clearerr() before the call to avoid false positive checks for
  * truncation.
  *
  * @param[in, out] field     Pointer to a decoded field (typically inside a
@@ -616,14 +616,40 @@ typedef enum {
  * @param[in]      encoding  Desired encoding.
  * @param[in]      string    The input string to set the field to.
  * @returns Success status
- * @retval true Success, check \ref fru_errno for \ref FELONGINPUT to
+ * @retval true Success, check \ref fru_errno.code for \ref FE2BIG to
  *              see if data was truncated
- * @retval false Failure, \ref fru_errno is set to one of:
- *               - \ref FERANGE
- *               - \ref FENONPRINT
- *               - \ref FENONHEX
- *               - \ref FENOTEVEN
- *               - \ref FEBADENC
+ * @retval false Failure, check \ref fru_errno for details
+ *
+ * @ingroup infocommon
+ */
+bool fru_setfield(fru_field_t * field,
+                  fru_field_enc_t encoding,
+                  const char * string);
+
+/**
+ * @brief Copy a binary input buffer into the given field,
+ *        perform length check, truncate if needed
+ *
+ * Unlike \ref fru_setfield() that takes an input string and an encoding
+ * type, this function takes a binary buffer and its size as an input.
+ * It the converts the buffer into a hex string, and sets the \a field
+ * encoding type to \ref FRU_FE_BINARY.
+ *
+ * If the input buffer size is too large to fit into a field (that is,
+ * more than 63 bytes), only the data that can fit will be taken, and
+ * the truncation event will be indicated via \ref fru_errno.code as
+ * \ref FE2BIG along with a success return code. Please call
+ * \ref fru_clearerr() before the call to avoid false positive checks for
+ * truncation.
+ *
+ * @param[in, out] field     Pointer to a decoded field (typically inside a
+ *                           member of fru_t)
+ * @param[in]      encoding  Desired encoding.
+ * @param[in]      string    The input string to set the field to.
+ * @returns Success status
+ * @retval true Success, check \ref fru_errno.code for \ref FE2BIG to
+ *              see if data was truncated
+ * @retval false Failure, check \ref fru_errno for details
  *
  * @ingroup infocommon
  */
@@ -663,7 +689,7 @@ bool fru_setfield(fru_field_t * field,
  * @param[in] index The index of the custom field to fetch
  *
  * @returns A pointer to the mandatory field at the requested index or \a NULL
- *          in the event of failure. For the latter case \ref fru_errno is set to:
+ *          in the event of failure. For the latter case \ref fru_errno.code is set to:
  *           - \ref FEAREANOTSUP
  *           - \ref FEAREABADTYPE
  *           - \ref FENOFIELD
@@ -704,7 +730,7 @@ fru_field_t * fru_getfield(const fru_t * fru,
  *
  * @returns A pointer to the added field, see \ref fru_setfield() for info
  *          on possible errors
- * @retval NULL Failure, additionally may set \ref fru_errno to:
+ * @retval NULL Failure, additionally may set \ref fru_errno.code to:
  *               - \ref FEAREANOTSUP
  *               - \ref FEAREABADTYPE
  *
@@ -733,7 +759,7 @@ fru_field_t * fru_add_custom(fru_t * fru,
  * @param[in] index The index of the custom field to fetch
  *
  * @returns A pointer to the custom field at the requested index or \a NULL
- *          in the event of failure. For the latter case \ref fru_errno is set to:
+ *          in the event of failure. For the latter case \ref fru_errno.code is set to:
  *           - \ref FEAREANOTSUP
  *           - \ref FEAREABADTYPE
  *           - \ref FENOFIELD
@@ -762,10 +788,7 @@ fru_field_t * fru_get_custom(const fru_t * fru,
  *
  * @returns Success status
  * @retval true The requested cusom field has been deleted
- * @retval false There was an error, see \ref fru_errno :
- *                - \ref FEAREANOTSUP
- *                - \ref FEAREABADTYPE
- *                - \ref FENOFIELD
+ * @retval false There was an error, see \ref fru_errno
  *
  * @ingroup infocommon
  */
@@ -823,10 +846,7 @@ typedef enum {
  *
  * @returns A byte converted from hex string (in the lower 8 bits)
  *          or a -1 for an error.
- * @retval -1 An error occured. \ref fru_errno / \p errno are set accordingly:
- *            FENONHEX - A non-hex character encountered in the
- *                       first two bytes of \a hex.
- *            FEGENERIC/EFAULT - \a hex was NULL
+ * @retval -1 An error occured. See \ref fru_errno
  *
  * @ingroup common
  */
@@ -860,7 +880,7 @@ int16_t fru_hex2byte(const char * hex);
  * @param[in, out] fru Pointer to an initial FRU structure (can be \p NULL)
  *
  * @returns A pointer to the initialized fru_t structure.
- * @retval NULL Error detected. \ref fru_errno is set accordingly.
+ * @retval NULL Error detected, \ref fru_errno is set accordingly.
  */
 fru_t * fru_init(fru_t * fru);
 
@@ -898,7 +918,7 @@ fru_t * fru_init(fru_t * fru);
  * @param[in] flags flags or FRU_NOFLAGS
  *
  * @returns A pointer to the filled in fru_t structure.
- * @retval NULL Error detected. \ref fru_errno is set accordingly.
+ * @retval NULL Error detected, \ref fru_errno is set accordingly.
  */
 fru_t * fru_loadfile(fru_t * fru,
                      const char * filename,
@@ -917,7 +937,7 @@ fru_t * fru_loadfile(fru_t * fru,
  * @param[in] flags Debug flags or \ref FRU_NOFLAGS
  *
  * @returns A pointer to the filled in fru_t structure.
- * @retval NULL Error detected. \ref fru_errno is set accordingly.
+ * @retval NULL Error detected, \ref fru_errno is set accordingly.
  */
 fru_t * fru_loadbuffer(fru_t * fru,
                        const void * buf,
@@ -1033,7 +1053,7 @@ bool fru_enable_area(fru_t * fru,
  * @param[in, out] fru A pointer to the FRU structure to modify
  * @param[in] atype The area type to disable
  * @returns A success status
- * @retval true Success, will also set \ref fru_errno to FEADISABLED
+ * @retval true Success, will also set \ref fru_errno.code to FEADISABLED
  *              if the area was already disabled before the call
  * @retval false Error, see \ref fru_errno for details
  */
@@ -1475,7 +1495,7 @@ fru_mr_rec_t * fru_get_mr(const fru_t * fru, size_t index);
  * \p type and the starting \p index. Updates \p index when the
  * record is found, sets it to the index of the found record.
  * If the found record was the last in the list, then sets
- * \ref fru_errno to \ref FEMREND (but succeeds)
+ * \ref fru_errno.code to \ref FEMREND (but succeeds)
  *
  * If \p type is FRU_MR_ANY, then \p index must point to a non-negative
  * value indicating the index of the record to fetch. In this case

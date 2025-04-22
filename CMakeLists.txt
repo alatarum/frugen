@@ -77,7 +77,6 @@ add_documentation(docs Doxyfile)
 # build libfru
 set(libfru_SOURCES
 	lib/fru__decode.c
-	lib/fru_binhex.c
 	lib/fru_enable_area.c
 	lib/fru_errno.c
 	lib/fru_add_custom.c
@@ -91,6 +90,7 @@ set(libfru_SOURCES
 	lib/fru_mr_ops.c
 	lib/fru_save.c
 	lib/fru_setfield.c
+	lib/fru_setfield_binary.c
 	lib/fru_getfield.c
 )
 set(libfru_HEADERS
