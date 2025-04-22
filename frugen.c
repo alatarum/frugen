@@ -518,7 +518,7 @@ bool datestr_to_tv(struct timeval * tv, const char * datestr)
 
 	/* We don't use strptime() to use the same format for all locales,
 	 * and also because that function is not available on Windows */
-	if(6 != sscanf(datestr, "%d/%d/%d %d:%d", &mday, &mon, &year, &hour, &min)) {
+	if(5 != sscanf(datestr, "%d/%d/%d %d:%d", &mday, &mon, &year, &hour, &min)) {
 		return false;
 	}
 
@@ -542,7 +542,7 @@ static struct frugen_config_s config = {
 	.flags = FRU_NOFLAGS,
 };
 
-void tv_to_datestr(char * datestr, const struct timeval * tv)
+void tv_to_datestr(char * datestr, const struct timeval * tv, bool include_timezone)
 {
 		const struct timeval tv_unspecified = { 0 };
 
@@ -555,7 +555,10 @@ void tv_to_datestr(char * datestr, const struct timeval * tv)
 		// Time in FRU is in UTC, convert to local
 		time_t seconds = tv->tv_sec - timezone;
 		localtime_r(&seconds, &bdtime);
-		strftime(datestr, DATEBUF_SZ, "%d/%m/%Y %H:%M %Z", &bdtime);
+		const char * const fmt = include_timezone
+		                         ? "%d/%m/%Y %H:%M %Z"
+		                         : "%d/%m/%Y %H:%M";
+		strftime(datestr, DATEBUF_SZ, fmt, &bdtime);
 }
 
 const frugen_name_t area_names[FRU_TOTAL_AREAS] = {
@@ -759,7 +762,7 @@ void print_info_area(FILE ** fp, const fru_t * fru, fru_area_type_t atype)
 			        : "");
 		}
 		else {
-			tv_to_datestr(datebuf, &fru->board.tv);
+			tv_to_datestr(datebuf, &fru->board.tv, true);
 		}
 
 		fprintf(*fp, "   %25s: %11s %s\n", "Manufacturing date/time", "", datebuf);
@@ -1141,10 +1144,10 @@ int main(int argc, char * argv[])
 			case 'd': // board-date
 				debug(2, "Board manufacturing date will be set from [%s]", optarg);
 				if (!datestr_to_tv(&fru->board.tv, optarg))
-					fatal("Invalid date/time format, use \"DD/MM/YYYY HH:MM:SS\"");
+					fatal("Invalid date/time format, use \"DD/MM/YYYY HH:MM\"");
 				// Don't care about errors. The area is either enabled now or was enabled before.
 				fru_enable_area(fru, FRU_BOARD_INFO, FRU_APOS_AUTO);
-				break;
+				// fall-through
 			case 'u': // board-date-unspec
 				fru->board.tv_auto = false;
 				break;
@@ -1158,6 +1161,23 @@ int main(int argc, char * argv[])
 				break;
 		}
 	} while (opt != -1);
+
+	// Now as we've loaded everything, validate it by passing through
+	// libfru encoder and decoder
+	size_t fullsize = 0;
+	uint8_t *frubuf = NULL;
+	struct timeval orig_tv = fru->board.tv;
+	bool orig_tv_auto = fru->board.tv_auto;
+	if (!fru_savebuffer((void **)&frubuf, &fullsize, fru)) {
+		fru_fatal("Failed to encode the provided data");
+	}
+	fru_free(fru);
+	fru = fru_loadbuffer(NULL, frubuf, fullsize, FRU_NOFLAGS);
+	if (!fru) {
+		fru_fatal("Failed to decode the FRU encoded from provided data");
+	}
+	fru->board.tv_auto = orig_tv_auto;
+	fru->board.tv = orig_tv;
 
 	/* Generate the output */
 	if (optind >= argc)

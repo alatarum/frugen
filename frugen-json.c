@@ -442,6 +442,10 @@ bool load_info_area(fru_t * fru,
 				const char *s = json_object_get_string(jsfield);
 				// get_string doesn't return any errors
 
+				if (!strcmp(s, "auto")) {
+					fru->board.tv_auto = true;
+				}
+
 				if (!datestr_to_tv(&fru->board.tv, s)) {
 					warn("Invalid board date/time format in JSON file");
 					return false;
@@ -520,21 +524,6 @@ void frugen_loadfile_json(fru_t * fru, const char * fname)
 
 	nextloop:
 		debug(2, "%s Area loaded from JSON", area_names[atype].human);
-	}
-
-	// Now as we've loaded everything, validate it by passing through
-	// libfru encoder and decoder
-	size_t fullsize = 0;
-	uint8_t *frubuf = NULL;
-	if (!fru_savebuffer((void **)&frubuf, &fullsize, fru)) {
-		fru_warn("Failed to encode the loaded JSON");
-		goto out;
-	}
-	fru_free(fru);
-	fru = fru_loadbuffer(NULL, frubuf, fullsize, FRU_NOFLAGS);
-	if (!fru) {
-		fru_warn("Failed to decode the FRU encoded from JSON");
-		goto out;
 	}
 
 	success = true;
@@ -625,15 +614,17 @@ void add_info_area_json(struct json_object * jso,
 	if (atype == FRU_BOARD_INFO) {
 		/* Board has a date field */
 		struct timeval tv = fru->board.tv;
-		fru_field_t datefield;
-		datefield.enc = FRU_FE_AUTO; // Ensure it's saved as a plain string
+		// Auto encoding ensures it's saved as a plain string
+		fru_field_t datefield = { .enc = FRU_FE_AUTO };
 
 		if (fru->board.tv_auto) {
 			strcpy(datefield.val, "auto");
 		}
 		else {
-			tv_to_datestr(datefield.val, &tv);
+			// Don't save local timezone in JSON
+			tv_to_datestr(datefield.val, &tv, false);
 		}
+		// Skip writing out the 'date' field if board date is unspecified
 		if (datefield.val[0]) {
 			section = json_object_new_object();
 			add_info_field(section, "date", &datefield);

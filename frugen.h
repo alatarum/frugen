@@ -105,7 +105,7 @@ bool datestr_to_tv(struct timeval *tv, const char *datestr);
 /**
  * Convert FRU time (in UTC) to a local date/time string
  */
-void tv_to_datestr(char *datestr, const struct timeval *tv);
+void tv_to_datestr(char *datestr, const struct timeval *tv, bool include_timezone);
 
 /**
  * Split a `--set` command line option argument string
