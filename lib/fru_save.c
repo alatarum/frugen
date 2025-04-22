@@ -287,7 +287,11 @@ bool encode_iu_area(void * area_out, size_t * size,
 			return false;
 		}
 	}
-	*size = bytesize + sizeof(internal->ver);
+	*size = FRU__BLOCK_ALIGN(bytesize + sizeof(internal->ver));
+	if (internal) {
+		// Ensure the unused tail of the area is not some garbage
+		memset(internal->data + bytesize, 0, *size - bytesize);
+	}
 	return true;
 }
 
