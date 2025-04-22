@@ -28,8 +28,8 @@ binary FRU file internals. All data that the user has to deal with is either
 plain text or hex strings (in rare occasions raw binary data buffers may also
 be supported).
 
-Most memory management in the library is automatic and the users doen't have to
-care about freeing any internal allocation as long as they use the library API
+Most memory management in the library is automatic and the users don't have to
+care about freeing any internal allocations as long as they use the library API
 properly. The central entity of the library is \ref fru_t, the structure type
 that represents a fully decoded FRU information as a whole. You will find
 fields for every FRU area inside that structure, and there is a lot of
@@ -37,28 +37,39 @@ functions to work with that structure. You may load it from a file or from
 an in-memory buffer, and you may save it back. In the meantime you're free
 to modify the data in the structure as you want.
 
+The main idea is that all the data in \ref fru_t is in text, human-readable
+format, except for integer fields like, for instance, `fru_t.chassis.type`.
+The API however has functions to set the values from binary buffers. Those
+include \ref fru_setfield_binary() and \ref fru_set_internal_binary().
+
 Any errors detected by the API calls they will report via a familiar POSIX-like
-mechanism of a global thread-specific \ref fru_errno variable.
+mechanism of a global thread-specific \ref fru_errno variable, which in `libfru`
+is enhanced to provide the caller with the information on where exactly the
+error has occured.
 
 Please read the doxygen-formatted documentation thoroughly before first use.
-You may also check frugen code for library usage examples.
+You may also check `frugen.c` and `frugen-json.c` code for library usage examples.
 
 So far supported in libfru are:
 
-  * Data decoding from all the encoding formats defined by the FRU specification.
+  * Data decoding from all the encoding types defined by the FRU specification.
     Exception:
 
     * Unicode is not supported
-    * Language codes aren't actually supported, all text is decoded as if it was English (ASCII+Latin1)
+    * Language codes aren't actually supported, all text is decoded as if it
+      was English (ASCII+Latin1)
 
   * Data encoding into all the defined formats (binary, BCD plus, 6-bit ASCII, language code specific text).
-    The exceptions are:
+    You may specify the encoding type you want. The exceptions are:
 
-    * all text is always encoded as if the language code was English (ASCII, 1 byte per character)
-    * encoding is selected either automatically based on value range of the supplied data, or by
-      specifying it explicitly
+    * All text is always encoded as if the language code was English
+      (ASCII+Latin1, 1 byte per character)
 
-  * Internal use area loading as a hex string
+  * Setting fields (both custom and standard) from a binary buffer
+    (will be converted to hex strings to store in \ref fru_t)
+
+  * Internal use area decoding into a hex string
+
   * Internal use area creation from:
 
     * A hex string (auto sizing, just to accomodate the provided data)
@@ -95,7 +106,10 @@ So far supported in libfru are:
       data is a hex string for decoding, or a hex string or a binary
       buffer for encoding.
 
-  * FRU file creation (in a memory buffer)
+  * FRU file creation (in a memory buffer or in an actual file)
+  * FRU file loading (from a memory buffer or from an actual file).
+    \b NOTE: mmap() is used to open a file, may not work on device nodes
+             directly. See \ref fru_loadfile().
 
 _NOT supported:_
 
@@ -118,9 +132,9 @@ The frugen tool supports the following (limitations imposed by the libfru librar
     not available from the command line arguments.
 
 _NOTE:_ You may use `frugen` to modify some standard fields even on FRU files that
-        contain unsupported multirecord area records if you use binary input and
-        binary output formats. Those fields will be copied as is from the source to the
-        destination file.
+        contain unsupported multirecord area records.
+        Those records will be decoded as 'custom' (raw) type and encoded back
+        the same way, preserving their data.
 
 _NOTE:_ You may use `frugen` to fix area and record checksums in your FRU file.
         For that purpose use binary input and output formats, and specify the debug (`-g`)
@@ -132,7 +146,7 @@ _NOTE:_ You may use `frugen` to fix area and record checksums in your FRU file.
 ### Operation principles
 
   The `frugen` tool takes a template in any of the supported formats and builds
-  an 'exploded' and 'decoded' version of fru file in memory.  It then takes
+  an 'exploded' or 'decoded' version of fru file in memory. It then takes
   command line arguments and applies any changes to the fru fields specified by
   those arguments. After that step is complete, it either encodes/packs the
   data into a binary fru file, or dumps it in json or plain text format to a
@@ -145,30 +159,33 @@ _NOTE:_ You may use `frugen` to fix area and record checksums in your FRU file.
 
   If autodetection is chosen (see the 'set' option below), then the tool will
   attempt to encode the new data the most compact/efficient way.  It will start
-  with binary encoding. If your data string contains anything except for hex
-  digits (0-9, A-F), the tool will expand the charset and attempt to use BCD+.
-  If that doesn't fit, 6-bit ASCII will be attempted.  Finally, the data string
-  will be copied as is (plain text encoding) if none of the encoding worked.
+  with 6-bit ASCII encoding as it yields the most compact result. If your data
+  string contains anything beyond uppercase ASCII, digits, and punctuation, the
+  tool will expand the charset and attempt to use BCD+. If that doesn't fit,
+  a binary encoding will be attempted. If there is anything beyond hex digits,
+  then finally the data string will be copied as is (plain text encoding).
+
+  \b NOTE: Previous versions of `frugen` would start with binary encoding,
+           having the rest of the order the same.
 
   If you choose to preserve the original encoding, please note that `frugen`
   will fail if your new data cannot be encoded using the same encoding type as
   the original. For instance, if your original data was "ACME" encoded as 6-bit
   ASCII, and you want to preserve the encoding, but the new data is "A Company
   Making Everything", then the tool will fail because 6-bit encoding doesn't
-  allow for lowercase characters. Please note, though, that if you choose text
-  or json output format, then no validity check will be immediately performed
-  on the new value. The tool will then fail only on the attempt to convert the
-  resulting json template to binary form, not earlier.
+  allow for lowercase characters.
 
   Input binary FRU files (or templates as considered by frugen) may contain
-  multirecord areas. Such areas consists of many so-called 'records' of various
+  multirecord areas. Such areas consist of many so-called 'records' of various
   types, including some OEM ones that aren't covered by IPMI FRU specification.
   It is impossible for `frugen` or `libfru` to support them all, but the best
   effort is made to not destroy them at least. When using a binary FRU file as
-  a template, and binary format for the output, `frugen` will copy any
-  unsupported MR records from the source into the destination without any
-  alteration. The same approach will be applied to the iternal use area,
-  the contents of which are completely OEM-specific and can not be parsed.
+  a template, `frugen` will load such records as raw type (see \ref fru_mr_rec_t.raw),
+  and will save them into json output as 'custom'
+
+  A similar approach is used for the iternal use area, the contents of which are
+  completely OEM-specific and can not be parsed. The are is decoded as a hex string
+  and then encoded back into a raw binary.
 
 ### Invocation
 
