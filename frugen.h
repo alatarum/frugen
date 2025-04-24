@@ -14,6 +14,10 @@
 
 #include "fru.h"
 
+// List indices are base 1 in frugen and base 0 in libfru
+#define LIST_INDEX_LIBFRU(frugen_idx) ((frugen_idx) - 1)
+#define LIST_INDEX_FRUGEN(libfru_idx) ((libfru_idx) + 1)
+
 typedef enum {
 	FRUGEN_FMT_UNSET,
 	FRUGEN_FMT_FIRST,
@@ -94,6 +98,7 @@ typedef struct {
 	} field;
 	char *value;
 	int custom_index;
+	bool custom_insert; // Insert or replace at custom_index?
 } fieldopt_t;
 
 #define DATEBUF_SZ 29 ///< Date string buffer length (must fit "DD/MM/YYYY HH:MM:SS UTC+XXXX")

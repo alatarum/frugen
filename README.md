@@ -201,8 +201,9 @@ Options:
 
 	-d <argument>, --board-date <argument>
 		Set board manufacturing date/time, use "DD/MM/YYYY HH:MM" format.
-		By default the resulting output depends on the ouput format and
-		presence of '-u' option as follows:
+		By default, if the date is neithers specified by this option, nor
+		is given in the input template, the resulting output depends on the
+		output format and presence of '-u' option as follows:
 
 		-o     | -u specified         | -u not specified
 		-------|----------------------|-------------------------
@@ -273,9 +274,16 @@ Options:
 		For area and field names, please refer to example.json
 
 		You may specify field name 'custom' to add a new custom field.
-		Alternatively, you may specify field name 'custom.<N>' to
+		Alternatively, you may specify field name 'custom.[+]<N>' to
 		replace the value of the custom field number N given in the
-		input template file.
+		input template file. A plus sign before <N> indicates that you
+		wish the new field to inserted before the existing entry at
+		rather than replace it.
+
+		You may also specify either H/S/F or T/E/L letter for <N> to
+		respectively indicate that you want the entry to be _inserted_
+		at the head/start/first position in the list, or added at
+		the tail/end/last position.
 
 		Examples:
 
@@ -286,9 +294,13 @@ Options:
 			frugen -r fru-template.bin -s :board.pname="MY BOARD" out.fru
 				# (auto-encode board.pname as 6-bit ASCII)
 			frugen -j fru-template.json -s binary:board.custom=0102DEADBEEF out.fru
-				# (add a new binary-encoded custom field to board)
+				# (add a new binary-encoded custom field to board, at the end of list)
+			frugen -j fru-template.json -s binary:board.custom.h=0102DEADBEEF out.fru
+				# (add a new binary-encoded custom field to board, at the head of list)
 			frugen -j fru-template.json -s binary:board.custom.2=0102DEADBEEF out.fru
-				# (replace custom field 2 in board with new value).
+				# (replace custom field 2 in board with new value)
+			frugen -j fru-template.json -s binary:board.custom.+2=0102DEADBEEF out.fru
+				# (insert a custom field at position 2 in board, old 2 becomes 3).
 
 	-t <argument>, --chassis-type <argument>
 		Set chassis type (hex). Defaults to 0x02 ('Unknown').

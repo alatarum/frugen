@@ -81,8 +81,9 @@ static const struct option options[] = {
 /* Sorted by index */
 static const char * const option_help[] = {
 	['d'] = "Set board manufacturing date/time, use \"DD/MM/YYYY HH:MM\" format.\n\t\t"
-	        "By default the resulting output depends on the ouput format and\n\t\t"
-	        "presence of '-u' option as follows:\n\t\t"
+	        "By default, if the date is neithers specified by this option, nor\n\t\t"
+	        "is given in the input template, the resulting output depends on the\n\t\t"
+	        "output format and presence of '-u' option as follows:\n"
 	        "\n\t\t"
 	        "-o     | -u specified         | -u not specified\n\t\t"
 	        "-------|----------------------|-------------------------\n\t\t"
@@ -147,9 +148,16 @@ static const char * const option_help[] = {
 	        "For area and field names, please refer to example.json\n"
 	        "\n\t\t"
 	        "You may specify field name 'custom' to add a new custom field.\n\t\t"
-	        "Alternatively, you may specify field name 'custom.<N>' to\n\t\t"
+	        "Alternatively, you may specify field name 'custom.[+]<N>' to\n\t\t"
 	        "replace the value of the custom field number N given in the\n\t\t"
-	        "input template file.\n"
+	        "input template file. A plus sign before <N> indicates that you\n\t\t"
+	        "wish the new field to inserted before the existing entry at\n\t\t"
+	        "rather than replace it.\n"
+	        "\n\t\t"
+	        "You may also specify either H/S/F or T/E/L letter for <N> to\n\t\t"
+	        "respectively indicate that you want the entry to be _inserted_\n\t\t"
+	        "at the head/start/first position in the list, or added at\n\t\t"
+	        "the tail/end/last position.\n"
 	        "\n\t\t"
 	        "Examples:\n"
 	        "\n\t\t"
@@ -160,9 +168,13 @@ static const char * const option_help[] = {
 	        "\tfrugen -r fru-template.bin -s :board.pname=\"MY BOARD\" out.fru\n\t\t"
 	        "\t\t# (auto-encode board.pname as 6-bit ASCII)\n\t\t"
 	        "\tfrugen -j fru-template.json -s binary:board.custom=0102DEADBEEF out.fru\n\t\t"
-	        "\t\t# (add a new binary-encoded custom field to board)\n\t\t"
+	        "\t\t# (add a new binary-encoded custom field to board, at the end of list)\n\t\t"
+	        "\tfrugen -j fru-template.json -s binary:board.custom.h=0102DEADBEEF out.fru\n\t\t"
+	        "\t\t# (add a new binary-encoded custom field to board, at the head of list)\n\t\t"
 	        "\tfrugen -j fru-template.json -s binary:board.custom.2=0102DEADBEEF out.fru\n\t\t"
-	        "\t\t# (replace custom field 2 in board with new value)",
+	        "\t\t# (replace custom field 2 in board with new value)\n\t\t"
+	        "\tfrugen -j fru-template.json -s binary:board.custom.+2=0102DEADBEEF out.fru\n\t\t"
+	        "\t\t# (insert a custom field at position 2 in board, old 2 becomes 3)",
 	/* Chassis info area related options */
 	['t'] = "Set chassis type (hex). Defaults to 0x02 ('Unknown')",
 	['u'] = "Don't use current system date/time for board mfg. date, use 'Unspecified'",
@@ -614,10 +626,10 @@ void fru_perror(FILE *fp, const char *fmt, ...)
 				        field_name[fru_errno.src][fru_errno.index].json);
 			else
 				fprintf(fp, "(field 'custom.%d')",
-				        fru_errno.index - (int)field_max[fru_errno.src]);
+				        LIST_INDEX_FRUGEN(fru_errno.index - (int)field_max[fru_errno.src]));
 		}
 		else if (fru_errno.src == FERR_LOC_MR) {
-			fprintf(fp, "(record %d)", fru_errno.index);
+			fprintf(fp, "(record %d)", LIST_INDEX_FRUGEN(fru_errno.index));
 		}
 	}
 	fputc('\n', fp);
@@ -695,11 +707,37 @@ fieldopt_t arg_to_fieldopt(char * arg)
 		if (!strncmp(arg, "custom", 6)) { /* It IS a custome field! */
 			char * p2;
 			opt.field.index = FRU_FIELD_CUSTOM;
+			opt.custom_index = FRU_LIST_TAIL; // By default add to the end
 			p2 = strchr(arg, '.');
-			if (p2)
-				opt.custom_index = atoi(p2 + 1);
-			if (opt.custom_index < 0)
-				fatal("Custom field index must be positive or zero");
+			if (p2) {
+				p2++;
+				if (*p2 == '+') {
+					opt.custom_insert = true;
+					opt.custom_index = -1; // Invalidate to require a number
+					p2++;
+				}
+
+				if (isdigit(*p2)) {
+					opt.custom_index = atoi(p2);
+				}
+				else switch (toupper(*p2)) {
+				case 'F': // First
+				case 'H': // Head
+				case 'S': // Start
+					opt.custom_index = FRU_LIST_HEAD;
+					break;
+				case 'L': // Last
+				case 'T': // Tail
+				case 'E': // End
+					opt.custom_index = FRU_LIST_TAIL;
+					break;
+				default:
+					opt.custom_index = -1;
+				}
+
+				if (opt.custom_index < 0)
+					fatal("Custom field index must be a [+]number or one of [FHSTEL]");
+			}
 		}
 		else {
 			fatal("Field '%s' doesn't exist in area '%s'",
@@ -794,12 +832,13 @@ void print_info_area(FILE ** fp, const fru_t * fru, fru_area_type_t atype)
 		return;
 	}
 
-	off_t idx = FRU_LIST_HEAD;
+	int idx = FRU_LIST_HEAD;
 	fru_field_t * field = NULL;
 	while ((field = fru_get_custom(fru, atype, idx))) {
 		const char * encoding = frugen_enc_name_by_val(field->enc);
-		fprintf(*fp, "   %22s %02jd: [%9s] \"%s\"\n",
-		        "Custom", (intmax_t)idx, encoding, field->val);
+		fprintf(*fp, "   %22s %2d: [%9s] \"%s\"\n",
+		        "Custom", LIST_INDEX_FRUGEN(idx),
+		        encoding, field->val);
 		idx++;
 	}
 	if (fru_errno.code != FENOFIELD) {
@@ -820,12 +859,12 @@ void print_mr_area(FILE ** fp, size_t mr_index, fru_mr_rec_t * mr_rec)
 	if (!FRU_MR_IS_VALID_TYPE(mr_type)) {
 		fprintf(*fp,
 		        "   #%zu: INVALID RECORD (%d) (bug in libfru?)\n",
-		        mr_index, mr_type
+		        LIST_INDEX_FRUGEN(mr_index), mr_type
 		);
 		return;
 	}
 	fprintf(*fp,
-	        "   #%zu: %s (0x%02hhX)%s\n", mr_index,
+	        "   #%zu: %s (0x%02hhX)%s\n", LIST_INDEX_FRUGEN(mr_index),
 	        mr_type_names[mr_type], (uint8_t)mr_type,
 	        (mr_rec->type == FRU_MR_RAW)
 	        ? " - Decoding unsupported yet:"
@@ -1111,29 +1150,45 @@ int main(int argc, char * argv[])
 				};
 
 				/* Now do the actual job and set data in the appropriate locations */
-				fieldopt = arg_to_fieldopt(optarg);
+				fieldopt = arg_to_fieldopt(optarg); // This will fail() on non-info areas
 				fru_field_t * field = NULL;
 				if (fieldopt.field.index != FRU_FIELD_CUSTOM)
 					field = fields[fieldopt.area][fieldopt.field.index];
 				else {
-					if (fieldopt.custom_index) {
-						field = fru_get_custom(fru, fieldopt.area, fieldopt.custom_index);
+					if (fieldopt.custom_index != FRU_LIST_HEAD
+					    && fieldopt.custom_index != FRU_LIST_TAIL)
+					{
+						if (fieldopt.custom_insert) {
+							// here custom_index is a 1-based index of the field
+							debug(3, "Inserting a custom field at position %d",
+							      fieldopt.custom_index);
+							field = fru_add_custom(fru, fieldopt.area,
+							                       LIST_INDEX_LIBFRU(fieldopt.custom_index),
+							                       FRU_FE_EMPTY, NULL);
+						}
+						else {
+							// here custom_index is a 1-based index of the field
+							debug(3, "Modifying custom field %d. New value is [%s]",
+							      fieldopt.custom_index, fieldopt.value);
+							field = fru_get_custom(fru, fieldopt.area,
+							                       LIST_INDEX_LIBFRU(fieldopt.custom_index));
+						}
 						if (!field) {
 							fru_fatal("Custom field %d not found in specified area",
-							          fieldopt.custom_index);
+							          LIST_INDEX_FRUGEN(fieldopt.custom_index));
 						}
-						debug(3, "Modifying custom field %d. New value is [%s]",
-						         fieldopt.custom_index, fieldopt.value);
 					}
 					else {
-						field = fru_add_custom(fru, fieldopt.area, FRU_LIST_TAIL, FRU_FE_EMPTY, NULL);
+						// custom_index is either FRU_LIST_HEAD or FRU_LIST_TAIL here
+						debug(3, "Adding a custom field to the start or end of the list");
+						field = fru_add_custom(fru, fieldopt.area, fieldopt.custom_index, FRU_FE_EMPTY, NULL);
 						if (!field) {
 							fru_fatal("Failed to add a custom field");
 						}
 
-						debug(3, "Adding a custom field from argument [%s]", optarg);
 					}
 				}
+				debug(3, "Setting the custom field to [%s]", fieldopt.value);
 				if(!fru_setfield(field, fieldopt.type, fieldopt.value)) {
 					fru_fatal("Failed to add custom field value '%s'", fieldopt.value);
 				}

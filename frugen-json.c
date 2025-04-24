@@ -172,16 +172,16 @@ bool load_info_fields(fru_t * fru, fru_area_type_t atype,
 			continue;
 
 		if (!load_single_field(&field, item)) {
-			warn("Failed to load custom field %zu", i);
+			warn("Failed to load custom field %zu", LIST_INDEX_FRUGEN(i));
 			goto out;
 		}
 
 		if (!fru_add_custom(fru, atype, FRU_LIST_TAIL, field.enc, field.val)) {
-			fru_warn("Failed to add custom field %zu", i);
+			fru_warn("Failed to add custom field %zu", LIST_INDEX_FRUGEN(i));
 			goto out;
 		}
 
-		debug(2, "Custom field %zu has been loaded from JSON", i);
+		debug(2, "Custom field %zu has been loaded from JSON", LIST_INDEX_FRUGEN(i));
 	}
 
 	rc = true;
@@ -372,9 +372,9 @@ bool load_mr_area(fru_t * fru, json_object * jso)
 		if (!item)
 			continue;
 
-		debug(3, "Parsing record #%zu/%zu", i + 1, alen);
+		debug(3, "Parsing record #%zu/%zu", LIST_INDEX_FRUGEN(i), alen);
 		if (!load_mr_record(fru, item)) {
-			warn("Failed to load MR record #%zu from JSON", i);
+			warn("Failed to load MR record #%zu from JSON", LIST_INDEX_FRUGEN(i));
 			goto out;
 		}
 	}
@@ -384,19 +384,6 @@ bool load_mr_area(fru_t * fru, json_object * jso)
 out:
 	return rc;
 }
-
-#if 0
-/**
- * Allocate a multirecord area json object \a jso and build it from
- * the supplied multirecord area record list \a mr_reclist
- */
-static
-bool json_from_mr_reclist(json_object **jso,
-                          const fru_mr_reclist_t *mr_reclist,
-                          fru_flags_t flags)
-{
-}
-#endif
 
 static
 bool load_info_area(fru_t * fru,
