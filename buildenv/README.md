@@ -5,8 +5,14 @@ in which frugen/libfru builds can be tested
 
 Example:
 ```
-OSVER=noble
-docker --build-arg osver=$OSVER -t frugen-buildenv:$OSVER .
+OST=ubuntu
+OSV=noble
+docker --build-arg osver=$OSV -t frugen-buildenv:$OST-$OSV -f Dockerfile.$OST .
 ```
 
-The above example builds an image based on Ubuntu Noble Numbat
+Supported OS types:
+
+  - ubuntu
+  - fedora
+
+The above example builds an image based on Ubuntu Noble Numbat.

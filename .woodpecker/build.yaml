@@ -3,13 +3,16 @@ when:
   event: [push, pull_request]
 
 matrix:
-  Ubuntu:
-    - noble
-    - jammy
-    - xenial
+  OS:
+    - ubuntu-plucky
+    - ubuntu-noble
+    - ubuntu-xenial
+    - fedora-42
+    - fedora-41
+    - fedora-39
 
 variables:
-  - &buildenv 'alexanderamelkin/frugen-buildenv:${Ubuntu}'
+  - &buildenv 'alexanderamelkin/frugen-buildenv:${OS}'
 
 clone:
   - name: git

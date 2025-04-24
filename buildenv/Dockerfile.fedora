@@ -1,0 +1,14 @@
+#
+# This file is for creating the build environment docker image
+# for frugen.
+#
+ARG osver=latest
+FROM fedora:$osver
+RUN yum install -y \
+    make \
+    automake \
+    gcc \
+    cmake \
+    json-c-devel \
+    doxygen \
+    graphviz
