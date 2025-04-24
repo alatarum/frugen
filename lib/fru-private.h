@@ -369,7 +369,8 @@ fru__reclist_t ** fru__get_customlist(const fru_t * fru, fru_area_type_t atype);
 /**
  * Allocate a new reclist entry and add it to reclist, pointed
  * to by \a head_ptr. Set \a head_ptr to point to the newly
- * allocated entry if \a head_ptr was NULL.
+ * allocated entry if \a head_ptr was NULL or if index was
+ * \ref FRU_LIST_HEAD
  *
  * @note Doesn't allocate/add the actual data to the entry
  *

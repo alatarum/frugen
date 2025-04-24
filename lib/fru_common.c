@@ -136,6 +136,11 @@ void * fru__add_reclist_entry(void * head_ptr, size_t index)
 			// Update the previous entry (or the last one)
 			prevrec->next = rec;
 		}
+		else {
+			// Added at the head, replace the head pointer
+			*reclist = rec;
+		}
+
 		if (oldrec) {
 			// Don't lose the old entry that was at this position
 			rec->next = oldrec;
