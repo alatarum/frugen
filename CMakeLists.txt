@@ -152,9 +152,10 @@ else(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 	target_link_libraries(frugen fru-shared)
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
-if(ENABLE_JSON)
-	find_package(PkgConfig)
-	pkg_check_modules(json-c REQUIRED json-c)
+find_package(PkgConfig)
+pkg_check_modules(json-c json-c)
+
+if(ENABLE_JSON AND json-c_FOUND)
 
 	add_definitions(-D__HAS_JSON__)
 	if(JSON_STATIC OR BINARY_STATIC)
@@ -164,9 +165,9 @@ if(ENABLE_JSON)
 	endif()
 
 	target_include_directories(frugen PRIVATE ${json-c_INCLUDE_DIRS})
-else(ENABLE_JSON)
+else(ENABLE_JSON AND json-c_FOUND)
 	message (WARNING "JSON library support *disabled*!")
-endif(ENABLE_JSON)
+endif(ENABLE_JSON AND json-c_FOUND)
 
 # install targets
 install(TARGETS frugen RUNTIME DESTINATION bin)
