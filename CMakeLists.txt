@@ -129,12 +129,45 @@ if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 
 # target for frugen
-set(frugen_SOURCES)
-list(APPEND frugen_SOURCES frugen.c)
-if(ENABLE_JSON)
-	list(APPEND frugen_SOURCES frugen-json.c)
-endif(ENABLE_JSON)
+set(frugen_SOURCES frugen.c)
 add_executable(frugen ${frugen_SOURCES})
+
+if(ENABLE_JSON)
+	find_package(PkgConfig)
+	pkg_check_modules(json-c json-c)
+
+# For debugging
+#	get_cmake_property(_variableNames VARIABLES)
+#	list (SORT _variableNames)
+#	foreach (_variableName ${_variableNames})
+#	    message(STATUS "VARIABLE ${_variableName}=${${_variableName}}")
+#	endforeach()
+
+	if(json-c_FOUND)
+		if(JSON_STATIC OR BINARY_STATIC)
+# TODO: Find a way to detect that static version is indeed present
+#       as it is missing in Fedora by default
+#			if (NOT json-c_STATIC_FOUND)
+#				message (WARNING "No STATIC json-c library available")
+#				set(ENABLE_JSON false)
+#			else ()
+				target_link_libraries(frugen ${json-c_STATIC_LIBRARIES})
+#			endif ()
+		else ()
+			target_link_libraries(frugen ${json-c_LIBRARIES})
+		endif ()
+	endif ()
+
+	if (ENABLE_JSON)
+		add_definitions(-D__HAS_JSON__)
+		list(APPEND frugen_SOURCES frugen-json.c)
+		set_target_properties(frugen PROPERTIES SOURCES "${frugen_SOURCES}")
+		target_include_directories(frugen PRIVATE ${json-c_INCLUDE_DIRS})
+	else ()
+		message (WARNING "JSON library support *disabled*!")
+	endif ()
+endif(ENABLE_JSON)
+
 list(APPEND ALL_TARGETS ${LIB_TARGETS} "frugen")
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -151,23 +184,6 @@ if(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 else(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
 	target_link_libraries(frugen fru-shared)
 endif(BINARY_STATIC OR NOT BUILD_SHARED_LIB)
-
-find_package(PkgConfig)
-pkg_check_modules(json-c json-c)
-
-if(ENABLE_JSON AND json-c_FOUND)
-
-	add_definitions(-D__HAS_JSON__)
-	if(JSON_STATIC OR BINARY_STATIC)
-		target_link_libraries(frugen ${json-c_STATIC_LIBRARIES})
-	else()
-		target_link_libraries(frugen ${json-c_LIBRARIES})
-	endif()
-
-	target_include_directories(frugen PRIVATE ${json-c_INCLUDE_DIRS})
-else(ENABLE_JSON AND json-c_FOUND)
-	message (WARNING "JSON library support *disabled*!")
-endif(ENABLE_JSON AND json-c_FOUND)
 
 # install targets
 install(TARGETS frugen RUNTIME DESTINATION bin)

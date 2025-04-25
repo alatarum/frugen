@@ -8,7 +8,19 @@ RUN yum install -y \
     make \
     automake \
     gcc \
+    glibc-static \
     cmake \
     json-c-devel \
     doxygen \
-    graphviz
+    graphviz \
+    git
+RUN echo "Preparing a static version of json-c for Fedora" ;\
+    JSONC_VER=$(pkgconf --modversion json-c); \
+    cd /; \
+    git clone -b json-c-${JSONC_VER} https://github.com/json-c/json-c.git ; \
+    cd /json-c ; \
+    mkdir build ; \
+    cd build ; \
+    cmake .. ; \
+    make ; \
+    make install
