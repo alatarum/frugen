@@ -101,8 +101,15 @@
 #define FRU__FIELDMAXLEN       FRU__FIELDLEN(UINT8_MAX)
 /** @endcond */
 
-#define FRU_MAX(a, b) (((a) > (b)) ? (a) : (b)) ///< Return the maximum of a and b
-#define FRU_MIN(a, b) (((a) > (b)) ? (b) : (a)) ///< Return the minimum of a and b
+/*
+ * The `+0LL` trick is to make some old versions of gcc happy
+ * when `a` is of a smaller type than `b`. Without this trick
+ * the compiler would always throw a 'comparison is always
+ * false' warning. Newer versions of gcc don't have that bug,
+ * but `+0LL` is a no-op anyway, so it's here unconditionally.
+ */
+#define FRU_MAX(a, b) (((intmax_t)((a) + 0LL) > (intmax_t)((b) + 0LL)) ? (a) : (b)) ///< Return the maximum of a and b
+#define FRU_MIN(a, b) (((intmax_t)((a) + 0LL) > (intmax_t)((b) + 0LL)) ? (b) : (a)) ///< Return the minimum of a and b
 
 /** For C-string allocation.
  *
